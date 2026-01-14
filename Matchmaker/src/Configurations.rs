@@ -63,5 +63,8 @@ pub fn GetStandardConfiguration() -> MatchmakingConfiguration {
             .expect("MAX_RATING must be a valid f64"),
         DefaultRegion: GetEnvOrDefault("DEFAULT_REGION", "NorthAmerica"),
         ValidRegions,
+        TicketTtlSeconds: GetEnvOrDefault("TICKET_TTL_SECONDS", "300")
+            .parse()
+            .expect("TICKET_TTL_SECONDS must be a valid i64"),
     }
 }

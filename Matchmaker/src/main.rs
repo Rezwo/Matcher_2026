@@ -18,17 +18,19 @@ use bb8_redis::RedisConnectionManager;
 use chrono::Utc;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::time::{interval, Duration, sleep};
 use tokio::sync::Notify;
 use uuid::Uuid;
 use serde_json::json;
 use tracing::{info, warn, error};
 use subtle::ConstantTimeEq;
+use metrics::{counter, gauge, histogram};
 
 use crate::Types::{
     MatchmakingTicket, PartyMember, MatchmakingConfiguration,
-    SubmitTicketRequest, HealthResponse, ErrorResponse
+    SubmitTicketRequest, HealthResponse, ErrorResponse,
+    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics
 };
 use crate::Configurations::GetStandardConfiguration;
 use crate::Matchmaker::Matchmaker as MatchmakingLogic;
@@ -41,6 +43,8 @@ struct AppState {
     pub MatchmakerInstance: MatchmakingLogic,
     pub ShuttingDown: AtomicBool,
     pub ShutdownNotify: Notify,
+    pub Metrics: MatchmakerMetrics,
+    pub CurrentQueueSize: AtomicU64,
 }
 
 fn ConstantTimeCompare(A: &str, B: &str) -> bool {
@@ -84,10 +88,20 @@ async fn ShutdownSignal(State: Arc<AppState>) {
     info!("Queue drained. Closing gracefully...");
 }
 
+fn InitializeMetrics() {
+    metrics_exporter_prometheus::PrometheusBuilder::new()
+        .with_http_listener(([0, 0, 0, 0], 9090))
+        .install()
+        .expect("Failed to install Prometheus exporter");
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
     info!("Initializing Production Matchmaker Server...");
+
+    InitializeMetrics();
+    info!("Prometheus metrics available at http://0.0.0.0:9090/metrics");
 
     let Config: MatchmakingConfiguration = GetStandardConfiguration();
     let RedisUrl: String = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
@@ -123,6 +137,8 @@ async fn main() {
         MatchmakerInstance: MatchmakingLogic::new(Config),
         ShuttingDown: AtomicBool::new(false),
         ShutdownNotify: Notify::new(),
+        Metrics: MatchmakerMetrics::new(),
+        CurrentQueueSize: AtomicU64::new(0),
     });
 
     let LoopState: Arc<AppState> = SharedState.clone();
@@ -157,23 +173,58 @@ async fn main() {
                 .filter_map(|Serialized| serde_json::from_str::<MatchmakingTicket>(Serialized).ok())
                 .collect();
 
+            LoopState.CurrentQueueSize.store(Tickets.len() as u64, Ordering::Relaxed);
+            gauge!("matchmaker_queue_size").set(Tickets.len() as f64);
+
+            if Tickets.is_empty() {
+                continue;
+            }
+
+            let ExpiredTickets = LoopState.MatchmakerInstance.RemoveExpiredTickets(&mut Tickets);
+            if !ExpiredTickets.is_empty() {
+                let ExpiredCount = ExpiredTickets.len();
+                LoopState.Metrics.TotalTicketsExpired.fetch_add(ExpiredCount as u64, Ordering::Relaxed);
+                counter!("matchmaker_tickets_expired").increment(ExpiredCount as u64);
+
+                let ExpiredIds: Vec<String> = ExpiredTickets.iter().map(|T| T.TicketId.to_string()).collect();
+                let _: Result<(), _> = redis::cmd("HDEL")
+                    .arg(REDIS_TICKET_KEY)
+                    .arg(ExpiredIds)
+                    .query_async(&mut *Connection)
+                    .await;
+
+                info!("Expired {} stale tickets", ExpiredCount);
+            }
+
             if Tickets.is_empty() {
                 continue;
             }
 
             LoopState.MatchmakerInstance.ExpandTickets(&mut Tickets);
-            let Matches: Vec<Vec<MatchmakingTicket>> = LoopState.MatchmakerInstance.FindMatches(&Tickets);
+            let Matches: Vec<Vec<MatchmakingTicket>> = LoopState.MatchmakerInstance.FindMatches(&mut Tickets);
             let MatchedIds: HashSet<Uuid> = LoopState.MatchmakerInstance.GetMatchedTicketIds(&Matches);
 
-            for FoundMatch in Matches {
+            let CurrentTimestamp = Utc::now().timestamp();
+
+            for FoundMatch in &Matches {
                 let MatchId: Uuid = Uuid::new_v4();
                 let Members: Vec<PartyMember> = FoundMatch.iter().flat_map(|Ticket| Ticket.Members.clone()).collect();
                 let MatchedTicketIds: Vec<String> = FoundMatch.iter().map(|Ticket| Ticket.TicketId.to_string()).collect();
+
+                for Ticket in FoundMatch {
+                    let WaitTime = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp) as u64;
+                    LoopState.Metrics.TotalWaitTimeSeconds.fetch_add(WaitTime, Ordering::Relaxed);
+                    LoopState.Metrics.MatchedTicketCount.fetch_add(1, Ordering::Relaxed);
+                    histogram!("matchmaker_wait_time_seconds").record(WaitTime as f64);
+                }
 
                 let InternalState: Arc<AppState> = LoopState.clone();
                 tokio::spawn(async move {
                     match SendMatchToRobloxWithRetry(MatchId, Members, InternalState.clone()).await {
                         Ok(_) => {
+                            InternalState.Metrics.TotalMatchesCreated.fetch_add(1, Ordering::Relaxed);
+                            counter!("matchmaker_matches_created").increment(1);
+
                             if let Ok(mut Con) = InternalState.RedisPool.get().await {
                                 let _: Result<(), _> = redis::cmd("HDEL")
                                     .arg(REDIS_TICKET_KEY)
@@ -184,6 +235,7 @@ async fn main() {
                         }
                         Err(Error) => {
                             error!("FATAL: Match notification failed: {}", Error);
+                            counter!("matchmaker_notification_failures").increment(1);
                         }
                     }
                 });
@@ -212,11 +264,13 @@ async fn main() {
 
     let ProtectedRoutes: Router<Arc<AppState>> = Router::new()
         .route("/submit", post(SubmitTicket))
+        .route("/ticket/{TicketId}", get(GetTicketStatus))
         .route("/ticket/{TicketId}", delete(CancelTicket))
         .layer(middleware::from_fn_with_state(SharedState.clone(), AuthMiddleware));
 
     let App: Router = Router::new()
         .route("/health", get(HealthCheck))
+        .route("/metrics/snapshot", get(GetMetricsSnapshot))
         .merge(ProtectedRoutes)
         .with_state(SharedState.clone());
 
@@ -243,6 +297,84 @@ async fn HealthCheck(
 
     let StatusCode = if RedisConnected { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (StatusCode, AxumJson(Response))
+}
+
+async fn GetMetricsSnapshot(
+    AxumState(Data): AxumState<Arc<AppState>>,
+) -> impl IntoResponse {
+    let Snapshot = MetricsSnapshot {
+        QueueSize: Data.CurrentQueueSize.load(Ordering::Relaxed),
+        TotalTicketsProcessed: Data.Metrics.TotalTicketsProcessed.load(Ordering::Relaxed),
+        TotalMatchesCreated: Data.Metrics.TotalMatchesCreated.load(Ordering::Relaxed),
+        TotalTicketsExpired: Data.Metrics.TotalTicketsExpired.load(Ordering::Relaxed),
+        AverageWaitTimeSeconds: Data.Metrics.GetAverageWaitTime(),
+        MatchesLastMinute: 0,
+    };
+
+    (StatusCode::OK, AxumJson(Snapshot))
+}
+
+async fn GetTicketStatus(
+    AxumState(Data): AxumState<Arc<AppState>>,
+    Path(TicketId): Path<Uuid>,
+) -> Result<AxumJson<TicketStatusResponse>, (StatusCode, AxumJson<ErrorResponse>)> {
+    let mut Connection = Data.RedisPool.get().await.map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        AxumJson(ErrorResponse { Error: "Failed to connect to Redis".to_string() }),
+    ))?;
+
+    let TicketJson: Option<String> = redis::cmd("HGET")
+        .arg(REDIS_TICKET_KEY)
+        .arg(TicketId.to_string())
+        .query_async(&mut *Connection)
+        .await
+        .map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            AxumJson(ErrorResponse { Error: "Failed to query Redis".to_string() }),
+        ))?;
+
+    let TicketJson = TicketJson.ok_or((
+        StatusCode::NOT_FOUND,
+        AxumJson(ErrorResponse { Error: "Ticket not found".to_string() }),
+    ))?;
+
+    let Ticket: MatchmakingTicket = serde_json::from_str(&TicketJson).map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        AxumJson(ErrorResponse { Error: "Failed to parse ticket data".to_string() }),
+    ))?;
+
+    let CurrentTimestamp = Utc::now().timestamp();
+    let WaitTimeSeconds = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp);
+
+    let AllTicketsJson: Vec<String> = redis::cmd("HVALS")
+        .arg(REDIS_TICKET_KEY)
+        .query_async(&mut *Connection)
+        .await
+        .unwrap_or_default();
+
+    let AllTickets: Vec<MatchmakingTicket> = AllTicketsJson
+        .iter()
+        .filter_map(|S| serde_json::from_str(S).ok())
+        .collect();
+
+    let QueuePosition = Data.MatchmakerInstance.GetQueuePosition(&AllTickets, TicketId);
+
+    let EstimatedWaitSeconds = if Data.Metrics.GetAverageWaitTime() > 0.0 {
+        Some((Data.Metrics.GetAverageWaitTime() * QueuePosition.unwrap_or(1) as f64) as i64)
+    } else {
+        None
+    };
+
+    let Response = TicketStatusResponse {
+        TicketId,
+        Status: "queued".to_string(),
+        QueuePosition,
+        WaitTimeSeconds,
+        ExpansionLevel: Ticket.SearchExpansionLevel,
+        EstimatedWaitSeconds,
+    };
+
+    Ok(AxumJson(Response))
 }
 
 async fn SubmitTicket(
@@ -329,6 +461,9 @@ async fn SubmitTicket(
             AxumJson(ErrorResponse { Error: "Failed to store ticket in Redis".to_string() }),
         ))?;
 
+    Data.Metrics.TotalTicketsProcessed.fetch_add(1, Ordering::Relaxed);
+    counter!("matchmaker_tickets_submitted").increment(1);
+
     info!("+ Party Ticket Queued: {} (Size: {}, Region: {})", TicketId, NewTicket.Members.len(), PreferredRegion);
     Ok(AxumJson(TicketId))
 }
@@ -353,6 +488,7 @@ async fn CancelTicket(
         ))?;
 
     if Deleted > 0 {
+        counter!("matchmaker_tickets_cancelled").increment(1);
         info!("- Ticket Cancelled: {}", TicketId);
         Ok(StatusCode::NO_CONTENT)
     } else {

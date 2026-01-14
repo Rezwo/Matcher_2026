@@ -3,6 +3,7 @@
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicU64;
 
 pub type PlayerId = u64;
 pub type MatchmakingRating = f64;
@@ -53,6 +54,7 @@ pub struct MatchmakingConfiguration {
     pub MaximumRating: f64,
     pub DefaultRegion: String,
     pub ValidRegions: HashSet<String>,
+    pub TicketTtlSeconds: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,4 +66,60 @@ pub struct HealthResponse {
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub Error: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TicketStatusResponse {
+    pub TicketId: Uuid,
+    pub Status: String,
+    pub QueuePosition: Option<usize>,
+    pub WaitTimeSeconds: i64,
+    pub ExpansionLevel: u32,
+    pub EstimatedWaitSeconds: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MetricsSnapshot {
+    pub QueueSize: u64,
+    pub TotalTicketsProcessed: u64,
+    pub TotalMatchesCreated: u64,
+    pub TotalTicketsExpired: u64,
+    pub AverageWaitTimeSeconds: f64,
+    pub MatchesLastMinute: u64,
+}
+
+pub struct MatchmakerMetrics {
+    pub TotalTicketsProcessed: AtomicU64,
+    pub TotalMatchesCreated: AtomicU64,
+    pub TotalTicketsExpired: AtomicU64,
+    pub TotalWaitTimeSeconds: AtomicU64,
+    pub MatchedTicketCount: AtomicU64,
+}
+
+impl MatchmakerMetrics {
+    pub fn new() -> Self {
+        Self {
+            TotalTicketsProcessed: AtomicU64::new(0),
+            TotalMatchesCreated: AtomicU64::new(0),
+            TotalTicketsExpired: AtomicU64::new(0),
+            TotalWaitTimeSeconds: AtomicU64::new(0),
+            MatchedTicketCount: AtomicU64::new(0),
+        }
+    }
+
+    pub fn GetAverageWaitTime(&self) -> f64 {
+        let TotalWait = self.TotalWaitTimeSeconds.load(std::sync::atomic::Ordering::Relaxed);
+        let MatchedCount = self.MatchedTicketCount.load(std::sync::atomic::Ordering::Relaxed);
+        if MatchedCount == 0 {
+            0.0
+        } else {
+            TotalWait as f64 / MatchedCount as f64
+        }
+    }
+}
+
+impl Default for MatchmakerMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }

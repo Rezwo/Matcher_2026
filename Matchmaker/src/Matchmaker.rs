@@ -50,20 +50,37 @@ impl Matchmaker {
         }
     }
 
-    pub fn FindMatches(&self, Tickets: &[MatchmakingTicket]) -> Vec<Vec<MatchmakingTicket>> {
+    pub fn RemoveExpiredTickets(&self, Tickets: &mut Vec<MatchmakingTicket>) -> Vec<MatchmakingTicket> {
+        let CurrentTimestamp: i64 = Utc::now().timestamp();
+        let TtlSeconds: i64 = self.Configuration.TicketTtlSeconds;
+
+        let (Expired, Active): (Vec<_>, Vec<_>) = Tickets
+            .drain(..)
+            .partition(|Ticket| CurrentTimestamp - Ticket.SubmittedTimestamp > TtlSeconds);
+
+        *Tickets = Active;
+        Expired
+    }
+
+    pub fn FindMatches(&self, Tickets: &mut Vec<MatchmakingTicket>) -> Vec<Vec<MatchmakingTicket>> {
+        Tickets.sort_by(|A, B| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp));
+
         let mut PotentialMatches: Vec<Vec<MatchmakingTicket>> = Vec::new();
         let mut UsedTicketIds: HashSet<uuid::Uuid> = HashSet::new();
 
-        for (Index, BaseTicket) in Tickets.iter().enumerate() {
+        for BaseIndex in 0..Tickets.len() {
+            let BaseTicket = &Tickets[BaseIndex];
+
             if UsedTicketIds.contains(&BaseTicket.TicketId) {
                 continue;
             }
 
-            let mut MatchGroup: Vec<MatchmakingTicket> = vec![BaseTicket.clone()];
+            let mut MatchGroupIndices: Vec<usize> = vec![BaseIndex];
             let mut CurrentPlayerCount: u32 = BaseTicket.Members.len() as u32;
-            let mut FoundIds: Vec<uuid::Uuid> = vec![BaseTicket.TicketId];
 
-            for CandidateTicket in Tickets.iter().skip(Index + 1) {
+            for CandidateIndex in (BaseIndex + 1)..Tickets.len() {
+                let CandidateTicket = &Tickets[CandidateIndex];
+
                 if UsedTicketIds.contains(&CandidateTicket.TicketId) {
                     continue;
                 }
@@ -75,20 +92,24 @@ impl Matchmaker {
                 }
 
                 if self.AreCompatible(BaseTicket, CandidateTicket) && self.HaveRegionOverlap(BaseTicket, CandidateTicket) {
-                    MatchGroup.push(CandidateTicket.clone());
+                    MatchGroupIndices.push(CandidateIndex);
                     CurrentPlayerCount += CandidateSize;
-                    FoundIds.push(CandidateTicket.TicketId);
 
-                    if CurrentPlayerCount >= self.Configuration.MinimumPlayersPerMatch {
+                    if CurrentPlayerCount >= self.Configuration.MaximumPlayersPerMatch {
                         break;
                     }
                 }
             }
 
             if CurrentPlayerCount >= self.Configuration.MinimumPlayersPerMatch {
-                for Id in FoundIds {
-                    UsedTicketIds.insert(Id);
-                }
+                let MatchGroup: Vec<MatchmakingTicket> = MatchGroupIndices
+                    .iter()
+                    .map(|&Idx| {
+                        UsedTicketIds.insert(Tickets[Idx].TicketId);
+                        Tickets[Idx].clone()
+                    })
+                    .collect();
+
                 PotentialMatches.push(MatchGroup);
             }
         }
@@ -101,6 +122,16 @@ impl Matchmaker {
             .iter()
             .flat_map(|Group| Group.iter().map(|Ticket| Ticket.TicketId))
             .collect()
+    }
+
+    pub fn GetQueuePosition(&self, Tickets: &[MatchmakingTicket], TargetTicketId: uuid::Uuid) -> Option<usize> {
+        let mut SortedTickets = Tickets.to_vec();
+        SortedTickets.sort_by(|A, B| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp));
+
+        SortedTickets
+            .iter()
+            .position(|Ticket| Ticket.TicketId == TargetTicketId)
+            .map(|Pos| Pos + 1)
     }
 
     fn AreCompatible(&self, First: &MatchmakingTicket, Second: &MatchmakingTicket) -> bool {
