@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(non_snake_case)]
 
-use crate::Types::{MatchmakingTicket, MatchmakingConfiguration, Region};
+use crate::Types::{MatchmakingTicket, MatchmakingConfiguration};
 use chrono::Utc;
 use std::collections::HashSet;
 
@@ -20,8 +20,10 @@ impl Matchmaker {
         let CurrentTimestamp: i64 = Utc::now().timestamp();
 
         for Ticket in Tickets.iter_mut() {
-            let TimeInQueue: i64 = CurrentTimestamp - Ticket.SubmittedTimestamp;
-            let ExpansionsNeeded: u32 = (TimeInQueue / self.Configuration.SearchExpansionIntervalSeconds) as u32;
+            let TimeInQueue: i64 = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp);
+            let ExpansionsNeeded: u32 = (TimeInQueue / self.Configuration.SearchExpansionIntervalSeconds)
+                .try_into()
+                .unwrap_or(u32::MAX);
 
             if ExpansionsNeeded > Ticket.SearchExpansionLevel {
                 self.ApplyExpansion(Ticket, ExpansionsNeeded);
@@ -41,16 +43,14 @@ impl Matchmaker {
 
         if TargetLevel >= 2 {
             if let Some(NearbyRegions) = self.Configuration.RegionProximityMap.get(&Ticket.PreferredRegion) {
-                let mut NewRegions: HashSet<Region> = Ticket.AllowedRegions.iter().cloned().collect();
                 for Region in NearbyRegions {
-                    NewRegions.insert(Region.clone());
+                    Ticket.AllowedRegions.insert(Region.clone());
                 }
-                Ticket.AllowedRegions = NewRegions.into_iter().collect();
             }
         }
     }
 
-    pub fn FindMatches(&self, Tickets: Vec<MatchmakingTicket>) -> Vec<Vec<MatchmakingTicket>> {
+    pub fn FindMatches(&self, Tickets: &[MatchmakingTicket]) -> Vec<Vec<MatchmakingTicket>> {
         let mut PotentialMatches: Vec<Vec<MatchmakingTicket>> = Vec::new();
         let mut UsedTicketIds: HashSet<uuid::Uuid> = HashSet::new();
 
@@ -96,6 +96,13 @@ impl Matchmaker {
         PotentialMatches
     }
 
+    pub fn GetMatchedTicketIds(&self, Matches: &[Vec<MatchmakingTicket>]) -> HashSet<uuid::Uuid> {
+        Matches
+            .iter()
+            .flat_map(|Group| Group.iter().map(|Ticket| Ticket.TicketId))
+            .collect()
+    }
+
     fn AreCompatible(&self, First: &MatchmakingTicket, Second: &MatchmakingTicket) -> bool {
         let MaxOfMins: f64 = First.MinimumMatchmakingRating.max(Second.MinimumMatchmakingRating);
         let MinOfMaxs: f64 = First.MaximumMatchmakingRating.min(Second.MaximumMatchmakingRating);
@@ -103,11 +110,6 @@ impl Matchmaker {
     }
 
     fn HaveRegionOverlap(&self, First: &MatchmakingTicket, Second: &MatchmakingTicket) -> bool {
-        for Region in &First.AllowedRegions {
-            if Second.AllowedRegions.contains(Region) {
-                return true;
-            }
-        }
-        false
+        !First.AllowedRegions.is_disjoint(&Second.AllowedRegions)
     }
 }

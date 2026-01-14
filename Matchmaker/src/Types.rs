@@ -2,7 +2,7 @@
 
 use serde::{Serialize, Deserialize};
 use uuid::Uuid;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub type PlayerId = u64;
 pub type MatchmakingRating = f64;
@@ -16,19 +16,25 @@ pub struct PartyMember {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubmitTicketRequest {
+    pub Members: Vec<PartyMember>,
+    pub PreferredRegion: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MatchmakingTicket {
     pub TicketId: Uuid,
     pub Members: Vec<PartyMember>,
     pub AverageMatchmakingRating: MatchmakingRating,
     pub PreferredRegion: Region,
-    pub AllowedRegions: Vec<Region>,
+    pub AllowedRegions: HashSet<Region>,
     pub SubmittedTimestamp: i64,
     pub SearchExpansionLevel: u32,
     pub MinimumMatchmakingRating: MatchmakingRating,
     pub MaximumMatchmakingRating: MatchmakingRating,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct MatchmakingConfiguration {
     pub MinimumPlayersPerMatch: u32,
     pub MaximumPlayersPerMatch: u32,
@@ -43,4 +49,19 @@ pub struct MatchmakingConfiguration {
     pub RobloxApiKey: String,
     pub RobloxTopic: String,
     pub ServerAuthSecret: String,
+    pub MinimumRating: f64,
+    pub MaximumRating: f64,
+    pub DefaultRegion: String,
+    pub ValidRegions: HashSet<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HealthResponse {
+    pub Status: String,
+    pub RedisConnected: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    pub Error: String,
 }

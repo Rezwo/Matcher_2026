@@ -5,9 +5,12 @@ edition = "2021"
 
 [dependencies]
 redis = { version = "0.27", features = ["tokio-comp"] }
+bb8-redis = "0.17"
+bb8 = "0.8"
 axum = "0.8"
 tokio = { version = "1.43", features = ["full"] }
-tower = "0.5"
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 
 uuid = { version = "1.11", features = ["serde", "v4"] }
@@ -21,6 +24,9 @@ tracing-subscriber = "0.3"
 
 thiserror = "2.0"
 anyhow = "1.0"
+
+subtle = "2.6"
+governor = "0.8"
 
 [dev-dependencies]
 mockall = "0.13"
