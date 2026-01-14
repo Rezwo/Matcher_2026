@@ -1,0 +1,13 @@
+D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\deps\redis-e5c68a89453845ac.d: C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\lib.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\macros.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\parser.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\client.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\connection.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\types.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\script.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\cmd.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\commands.rs
+
+D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\deps\libredis-e5c68a89453845ac.rmeta: C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\lib.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\macros.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\parser.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\client.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\connection.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\types.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\script.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\cmd.rs C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\commands.rs
+
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\lib.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\macros.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\parser.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\client.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\connection.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\types.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\script.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\cmd.rs:
+C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\redis-0.8.0\src\commands.rs:
