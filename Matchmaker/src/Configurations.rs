@@ -1,4 +1,4 @@
-#![allow( dead_code )]
+#![allow(dead_code)]
 #![allow(non_snake_case)]
 
 use crate::Types::{MatchmakingConfiguration, Region};
@@ -10,7 +10,7 @@ pub fn GetStandardConfiguration() -> MatchmakingConfiguration {
     ProximityMap.insert("Europe".to_string(), vec!["Asia".to_string()]);
 
     MatchmakingConfiguration {
-        MinimumPlayersPerMatch : 8,
+        MinimumPlayersPerMatch : 1, 
         MaximumPlayersPerMatch : 12,
         MaximumPartySize : 4,
         InitialMatchmakingRatingRange : 100.0,

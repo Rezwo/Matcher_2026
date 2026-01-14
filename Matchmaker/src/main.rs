@@ -1,98 +1,123 @@
 #![allow( dead_code )]
-#![allow(non_snake_case)]
+#![allow( non_snake_case )]
 
 mod Types;
 mod Configurations;
 mod Matchmaker;
 
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
+use axum :: {
+    extract :: State,
+    routing :: post,
+    Json , Router,
 };
-use chrono::Utc;
-use std::sync::{Arc, Mutex};
-use tokio::time::{interval, Duration};
-use uuid::Uuid;
-use serde_json::json; 
+use chrono :: Utc;
+use std::sync :: {Arc , Mutex};
+use tokio::time :: {interval , Duration};
+use uuid :: Uuid;
+use serde_json :: json;
+use tracing :: {info , warn , error}; 
 
-// --- FIX: DO NOT USE Matchmaker::Matchmaker HERE ---
-use crate::Types::{MatchmakingTicket, PartyMember};
-use crate::Configurations::GetStandardConfiguration;
+use crate::Types :: {MatchmakingTicket , PartyMember};
+use crate::Configurations :: GetStandardConfiguration;
 
 struct AppState {
-    pub Tickets : Mutex<Vec<MatchmakingTicket>>,
-    // FIX: Refer to it as Module::Struct
+    pub Tickets : Mutex <Vec <MatchmakingTicket >>,
     pub MatchmakerInstance : Matchmaker::Matchmaker,
+}
+
+async fn ShutdownSignal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to install CTRL+C signal handler");
+    info!("Shutdown signal received. Closing Matchmaker server...");
 }
 
 #[tokio::main]
 async fn main() {
-    let SharedState = Arc::new(AppState {
+    tracing_subscriber::fmt::init();
+    info!("Initializing Matchmaker Server...");
+
+    let SharedState : Arc <AppState > = Arc::new(AppState {
         Tickets : Mutex::new(Vec::new()),
-        // FIX: Call new() on the fully qualified path
         MatchmakerInstance : Matchmaker::Matchmaker::new(GetStandardConfiguration()),
     });
 
-    // Background Matchmaking Loop
-    let LoopState = SharedState.clone();
+    let LoopState : Arc <AppState > = SharedState.clone();
     
     tokio::spawn(async move {
-        let TickRate = LoopState.MatchmakerInstance.Configuration.MatchmakerTickRateSeconds;
-        let mut Interval = interval(Duration::from_secs(TickRate));
+        let TickRate : u64 = LoopState.MatchmakerInstance.Configuration.MatchmakerTickRateSeconds;
+        let mut Interval : tokio::time::Interval = interval(Duration::from_secs(TickRate));
         
+        info!("Matchmaker Loop Started. Tick Rate: {}s", TickRate);
+
         loop {
             Interval.tick().await;
             
-            let mut Tickets = LoopState.Tickets.lock().unwrap();
+            let mut Tickets : std::sync::MutexGuard <Vec <MatchmakingTicket >> = LoopState.Tickets.lock().unwrap();
             
-            // 1. Expand Searches
-            LoopState.MatchmakerInstance.ExpandTickets(&mut Tickets);
+            if !Tickets.is_empty() {
+                info!("--- Tick: Checking {} tickets in queue ---", Tickets.len());
+            }
 
-            // 2. Attempt Matching
-            let Matches = LoopState.MatchmakerInstance.FindMatches(Tickets.clone());
+            LoopState.MatchmakerInstance.ExpandTickets(&mut Tickets);
+            let Matches : Vec <Vec <MatchmakingTicket >> = LoopState.MatchmakerInstance.FindMatches(Tickets.clone());
+
+            if !Matches.is_empty() {
+                info!("!!! FOUND {} MATCHES !!!", Matches.len());
+            }
 
             for Match in Matches {
                 let MatchId : Uuid = Uuid::new_v4();
-                let PlayerCount : usize = Match.iter().map(|T| T.Members.len()).sum();
+                let PlayerCount : usize = Match.iter().map(|T| T.Members.len()).sum::<usize >();
                 
-                println!("Match Created: {} with {} players", MatchId, PlayerCount);
+                info!(">>> Creating Match {} | Players: {}", MatchId , PlayerCount);
 
-                // --- ROBLOX COMMUNICATION ---
-                let AllMembers : Vec<PartyMember> = Match.iter()
+                let AllMembers : Vec <PartyMember > = Match.iter()
                     .flat_map(|T| T.Members.clone())
                     .collect();
 
                 tokio::spawn(async move {
-                    SendMatchToRoblox(MatchId, AllMembers).await;
+                    if let Err(E) = SendMatchToRoblox(MatchId , AllMembers).await {
+                        error!("Failed to notify Roblox: {}", E);
+                    }
                 });
-                // ---------------------------
 
-                let MatchedIds : Vec<Uuid> = Match.iter().map(|T| T.TicketId).collect();
+                let MatchedIds : Vec <Uuid > = Match.iter().map(|T| T.TicketId).collect();
                 Tickets.retain(|T| !MatchedIds.contains(&T.TicketId));
             }
         }
     });
 
-    let App = Router::new()
-        .route("/submit", post(SubmitTicket))
+    let App : Router = Router::new()
+        .route("/submit" , post(SubmitTicket))
         .with_state(SharedState);
 
-    let Listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("Matchmaker running on port 3000");
-    axum::serve(Listener, App).await.unwrap();
+    let Addr : &str = "0.0.0.0:3000";
+    let Listener : tokio::net::TcpListener = tokio::net::TcpListener::bind(Addr).await.unwrap();
+    
+    info!("Server Online. Listening on {}", Addr);
+    
+    // Graceful shutdown implementation
+    axum::serve(Listener , App)
+        .with_graceful_shutdown(ShutdownSignal())
+        .await
+        .unwrap();
+
+    info!("Server has shut down gracefully.");
 }
 
-#[allow(non_snake_case)]
 async fn SubmitTicket(
-    State(Data) : State<Arc<AppState>>,
-    Json(Members) : Json<Vec<PartyMember>>
-) -> Json<Uuid> {
+    State(Data) : State <Arc <AppState >>,
+    Json(Members) : Json <Vec <PartyMember >>
+) -> Json <Uuid > {
     let TicketId : Uuid = Uuid::new_v4();
     
-    let AvgRating : f64 = Members.iter().map(|M| M.MatchmakingRating).sum::<f64>() / Members.len() as f64;
+    let PlayerNames : Vec <String > = Members.iter().map(|M| M.PlayerName.clone()).collect();
+    info!("+ New Request: {} (Members: {:?})", TicketId , PlayerNames);
+
+    let AvgRating : f64 = Members.iter().map(|M| M.MatchmakingRating).sum::<f64 >() / Members.len() as f64;
     
-    let NewTicket = MatchmakingTicket {
+    let NewTicket : MatchmakingTicket = MatchmakingTicket {
         TicketId,
         Members,
         AverageMatchmakingRating : AvgRating,
@@ -104,45 +129,47 @@ async fn SubmitTicket(
         MaximumMatchmakingRating : AvgRating + 100.0,
     };
 
-    Data.Tickets.lock().unwrap().push(NewTicket);
+    let mut Lock : std::sync::MutexGuard <Vec <MatchmakingTicket >> = Data.Tickets.lock().unwrap();
+    Lock.push(NewTicket);
+    info!("  -> Added to Queue. Current Queue Size: {}", Lock.len());
+
     Json(TicketId)
 }
 
-#[allow(non_snake_case)]
-async fn SendMatchToRoblox(MatchId: Uuid, Members: Vec<PartyMember>) {
-    // === CONFIGURATION ===
-    let UniverseId = "YOUR_UNIVERSE_ID"; 
-    let ApiKey = "YOUR_API_KEY";         
-    let Topic = "GlobalMatchmaking";          
-    // =====================
+async fn SendMatchToRoblox(MatchId : Uuid , Members : Vec <PartyMember >) -> anyhow::Result <()> {
+    let UniverseId : &str = "9504219975"; 
+    let ApiKey : &str = "YOUR_API_KEY"; 
+    let Topic : &str = "GlobalMatchmaking"; 
 
-    let Client = reqwest::Client::new();
-    let PlayerIds : Vec<u64> = Members.iter().map(|M| M.PlayerId).collect();
+    info!("    -> Sending Match {} to Roblox Cloud...", MatchId);
 
-    let Payload = json!({
+    let Client : reqwest::Client = reqwest::Client::new();
+    let PlayerIds : Vec <u64 > = Members.iter().map(|M| M.PlayerId).collect();
+
+    let Payload : serde_json::Value = json!({
         "message": json!({
             "MatchId": MatchId,
             "PlayerIds": PlayerIds
         }).to_string()
     });
 
-    let Url = format!("https://apis.roblox.com/messaging-service/v1/universes/{}/topics/{}/publish", UniverseId, Topic);
+    let Url : String = format!("https://apis.roblox.com/messaging-service/v1/universes/{}/topics/{}" , UniverseId , Topic);
 
-    let Response = Client.post(&Url)
-        .header("x-api-key", ApiKey)
-        .header("Content-Type", "application/json")
+    let Response : reqwest::Response = Client.post(&Url)
+        .header("x-api-key" , ApiKey)
+        .header("Content-Type" , "application/json")
         .json(&Payload)
         .send()
-        .await;
+        .await?; 
 
-    match Response {
-        Ok(Res) => {
-            if !Res.status().is_success() {
-                println!("Error sending to Roblox: {:?}", Res.status());
-            } else {
-                println!("Sent match {} to Roblox", MatchId);
-            }
-        },
-        Err(E) => println!("Network error: {}", E),
+    if !Response.status().is_success() {
+        let Status : reqwest::StatusCode = Response.status();
+        let Body : String = Response.text().await.unwrap_or_default();
+        warn!("    !! ERROR from Roblox: Status {}" , Status);
+        warn!("    !! Body: {}" , Body);
+        return Err(anyhow::anyhow!("Roblox API returned error {}" , Status));
     }
+
+    info!("    -> SUCCESS: Roblox received Match {}" , MatchId);
+    Ok(())
 }
