@@ -1,5 +1,5 @@
-   0.307291700s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint: fingerprint error for Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker)/Check { test: false }/TargetInner { name: "Matcher", doc: true, ..: with_path("D:\\Coding_Completed_2025\\Matcher_2026\\Matchmaker\\src\\main.rs", Edition2021) }
-   0.307360800s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\Matcher-0903cf8dc00bdad6\bin-Matcher`
+   0.190984800s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint: fingerprint error for Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker)/Check { test: false }/TargetInner { name: "Matcher", doc: true, ..: with_path("D:\\Coding_Completed_2025\\Matcher_2026\\Matchmaker\\src\\main.rs", Edition2021) }
+   0.191028600s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\Matcher-6dd8387eaa759a10\bin-Matcher`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -26,8 +26,8 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   0.357858600s  INFO prepare_target{force=false package_id=metrics-exporter-prometheus v0.16.2 target="metrics_exporter_prometheus"}: cargo::core::compiler::fingerprint: fingerprint error for metrics-exporter-prometheus v0.16.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("metrics_exporter_prometheus", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\metrics-exporter-prometheus-0.16.2\\src\\lib.rs", Edition2018) }
-   0.357901700s  INFO prepare_target{force=false package_id=metrics-exporter-prometheus v0.16.2 target="metrics_exporter_prometheus"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\metrics-exporter-prometheus-a01573a899ec25d2\lib-metrics_exporter_prometheus`
+   0.219742100s  INFO prepare_target{force=false package_id=metrics-exporter-prometheus v0.16.2 target="metrics_exporter_prometheus"}: cargo::core::compiler::fingerprint: fingerprint error for metrics-exporter-prometheus v0.16.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("metrics_exporter_prometheus", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\metrics-exporter-prometheus-0.16.2\\src\\lib.rs", Edition2018) }
+   0.219784400s  INFO prepare_target{force=false package_id=metrics-exporter-prometheus v0.16.2 target="metrics_exporter_prometheus"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\metrics-exporter-prometheus-a01573a899ec25d2\lib-metrics_exporter_prometheus`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -55,8 +55,8 @@ Stack backtrace:
   19: git_midx_writer_dump
   20: BaseThreadInitThunk
   21: RtlUserThreadStart
-   0.358628400s  INFO prepare_target{force=false package_id=hyper-rustls v0.27.7 target="hyper_rustls"}: cargo::core::compiler::fingerprint: fingerprint error for hyper-rustls v0.27.7/Check { test: false }/TargetInner { ..: lib_target("hyper_rustls", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\hyper-rustls-0.27.7\\src\\lib.rs", Edition2021) }
-   0.358649200s  INFO prepare_target{force=false package_id=hyper-rustls v0.27.7 target="hyper_rustls"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\hyper-rustls-04b071f1b929849c\lib-hyper_rustls`
+   0.220421000s  INFO prepare_target{force=false package_id=hyper-rustls v0.27.7 target="hyper_rustls"}: cargo::core::compiler::fingerprint: fingerprint error for hyper-rustls v0.27.7/Check { test: false }/TargetInner { ..: lib_target("hyper_rustls", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\hyper-rustls-0.27.7\\src\\lib.rs", Edition2021) }
+   0.220444500s  INFO prepare_target{force=false package_id=hyper-rustls v0.27.7 target="hyper_rustls"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\hyper-rustls-04b071f1b929849c\lib-hyper_rustls`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -85,8 +85,8 @@ Stack backtrace:
   20: git_midx_writer_dump
   21: BaseThreadInitThunk
   22: RtlUserThreadStart
-   0.359152300s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="rustls"}: cargo::core::compiler::fingerprint: fingerprint error for rustls v0.23.36/Check { test: false }/TargetInner { ..: lib_target("rustls", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.23.36\\src\\lib.rs", Edition2021) }
-   0.359170800s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="rustls"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\rustls-b59c4e0848fa9b4c\lib-rustls`
+   0.220847000s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="rustls"}: cargo::core::compiler::fingerprint: fingerprint error for rustls v0.23.36/Check { test: false }/TargetInner { ..: lib_target("rustls", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.23.36\\src\\lib.rs", Edition2021) }
+   0.220868600s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="rustls"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\rustls-b59c4e0848fa9b4c\lib-rustls`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -116,8 +116,8 @@ Stack backtrace:
   21: git_midx_writer_dump
   22: BaseThreadInitThunk
   23: RtlUserThreadStart
-   0.359589700s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="aws_lc_rs"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-rs v1.15.2/Check { test: false }/TargetInner { ..: lib_target("aws_lc_rs", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-rs-1.15.2\\src\\lib.rs", Edition2021) }
-   0.359605600s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="aws_lc_rs"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-rs-e4c82ee88d6b7fa3\lib-aws_lc_rs`
+   0.221111400s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="aws_lc_rs"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-rs v1.15.2/Check { test: false }/TargetInner { ..: lib_target("aws_lc_rs", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-rs-1.15.2\\src\\lib.rs", Edition2021) }
+   0.221122100s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="aws_lc_rs"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-rs-e4c82ee88d6b7fa3\lib-aws_lc_rs`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -148,8 +148,8 @@ Stack backtrace:
   22: git_midx_writer_dump
   23: BaseThreadInitThunk
   24: RtlUserThreadStart
-   0.360178900s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-rs v1.15.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-rs-1.15.2\\build.rs", Edition2021) }
-   0.360197200s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-rs-9294c94b56ac9995\run-build-script-build-script-build`
+   0.221504200s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-rs v1.15.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-rs-1.15.2\\build.rs", Edition2021) }
+   0.221516300s  INFO prepare_target{force=false package_id=aws-lc-rs v1.15.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-rs-9294c94b56ac9995\run-build-script-build-script-build`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -182,8 +182,8 @@ Stack backtrace:
   24: git_midx_writer_dump
   25: BaseThreadInitThunk
   26: RtlUserThreadStart
-   0.360734000s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="build-script-main"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-sys v0.35.0/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-main", "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-sys-0.35.0\\builder\\main.rs", Edition2021) }
-   0.360752300s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="build-script-main"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-sys-4dbc4605f4d12860\run-build-script-build-script-main`
+   0.221868300s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="build-script-main"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-sys v0.35.0/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-main", "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-sys-0.35.0\\builder\\main.rs", Edition2021) }
+   0.221879700s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="build-script-main"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-sys-4dbc4605f4d12860\run-build-script-build-script-main`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -217,8 +217,8 @@ Stack backtrace:
   25: git_midx_writer_dump
   26: BaseThreadInitThunk
   27: RtlUserThreadStart
-   0.363469500s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="aws_lc_sys"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-sys v0.35.0/Check { test: false }/TargetInner { ..: lib_target("aws_lc_sys", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-sys-0.35.0\\src\\lib.rs", Edition2021) }
-   0.363498700s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="aws_lc_sys"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-sys-827ba5feb71b078e\lib-aws_lc_sys`
+   0.222894300s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="aws_lc_sys"}: cargo::core::compiler::fingerprint: fingerprint error for aws-lc-sys v0.35.0/Check { test: false }/TargetInner { ..: lib_target("aws_lc_sys", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\aws-lc-sys-0.35.0\\src\\lib.rs", Edition2021) }
+   0.222906100s  INFO prepare_target{force=false package_id=aws-lc-sys v0.35.0 target="aws_lc_sys"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\aws-lc-sys-827ba5feb71b078e\lib-aws_lc_sys`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -250,8 +250,8 @@ Stack backtrace:
   23: git_midx_writer_dump
   24: BaseThreadInitThunk
   25: RtlUserThreadStart
-   0.365216000s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustls v0.23.36/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.23.36\\build.rs", Edition2021) }
-   0.365237500s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\rustls-7db0496a616de224\run-build-script-build-script-build`
+   0.224119500s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustls v0.23.36/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-0.23.36\\build.rs", Edition2021) }
+   0.224133500s  INFO prepare_target{force=false package_id=rustls v0.23.36 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\rustls-7db0496a616de224\run-build-script-build-script-build`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -283,8 +283,8 @@ Stack backtrace:
   23: git_midx_writer_dump
   24: BaseThreadInitThunk
   25: RtlUserThreadStart
-   0.365890100s  INFO prepare_target{force=false package_id=rustls-webpki v0.103.8 target="webpki"}: cargo::core::compiler::fingerprint: fingerprint error for rustls-webpki v0.103.8/Check { test: false }/TargetInner { ..: lib_target("webpki", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-webpki-0.103.8\\src\\lib.rs", Edition2021) }
-   0.365929700s  INFO prepare_target{force=false package_id=rustls-webpki v0.103.8 target="webpki"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\rustls-webpki-d05ba297c90482e2\lib-webpki`
+   0.224457500s  INFO prepare_target{force=false package_id=rustls-webpki v0.103.8 target="webpki"}: cargo::core::compiler::fingerprint: fingerprint error for rustls-webpki v0.103.8/Check { test: false }/TargetInner { ..: lib_target("webpki", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rustls-webpki-0.103.8\\src\\lib.rs", Edition2021) }
+   0.224470800s  INFO prepare_target{force=false package_id=rustls-webpki v0.103.8 target="webpki"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\rustls-webpki-d05ba297c90482e2\lib-webpki`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -315,8 +315,8 @@ Stack backtrace:
   22: git_midx_writer_dump
   23: BaseThreadInitThunk
   24: RtlUserThreadStart
-   0.368362200s  INFO prepare_target{force=false package_id=tokio-rustls v0.26.4 target="tokio_rustls"}: cargo::core::compiler::fingerprint: fingerprint error for tokio-rustls v0.26.4/Check { test: false }/TargetInner { ..: lib_target("tokio_rustls", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\tokio-rustls-0.26.4\\src\\lib.rs", Edition2021) }
-   0.368498000s  INFO prepare_target{force=false package_id=tokio-rustls v0.26.4 target="tokio_rustls"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\tokio-rustls-8d1321e2de0bb7a9\lib-tokio_rustls`
+   0.224962300s  INFO prepare_target{force=false package_id=tokio-rustls v0.26.4 target="tokio_rustls"}: cargo::core::compiler::fingerprint: fingerprint error for tokio-rustls v0.26.4/Check { test: false }/TargetInner { ..: lib_target("tokio_rustls", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\tokio-rustls-0.26.4\\src\\lib.rs", Edition2021) }
+   0.224974900s  INFO prepare_target{force=false package_id=tokio-rustls v0.26.4 target="tokio_rustls"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\tokio-rustls-8d1321e2de0bb7a9\lib-tokio_rustls`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -346,8 +346,8 @@ Stack backtrace:
   21: git_midx_writer_dump
   22: BaseThreadInitThunk
   23: RtlUserThreadStart
-   0.374030200s  INFO prepare_target{force=false package_id=reqwest v0.12.28 target="reqwest"}: cargo::core::compiler::fingerprint: fingerprint error for reqwest v0.12.28/Check { test: false }/TargetInner { ..: lib_target("reqwest", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\reqwest-0.12.28\\src\\lib.rs", Edition2021) }
-   0.374105700s  INFO prepare_target{force=false package_id=reqwest v0.12.28 target="reqwest"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\reqwest-583376a7aebe44d6\lib-reqwest`
+   0.226409900s  INFO prepare_target{force=false package_id=reqwest v0.12.28 target="reqwest"}: cargo::core::compiler::fingerprint: fingerprint error for reqwest v0.12.28/Check { test: false }/TargetInner { ..: lib_target("reqwest", ["lib"], "C:\\Users\\renar\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\reqwest-0.12.28\\src\\lib.rs", Edition2021) }
+   0.226424700s  INFO prepare_target{force=false package_id=reqwest v0.12.28 target="reqwest"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\reqwest-b8a6fbe733afc4cd\lib-reqwest`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -375,8 +375,8 @@ Stack backtrace:
   19: git_midx_writer_dump
   20: BaseThreadInitThunk
   21: RtlUserThreadStart
-   0.379027800s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint: fingerprint error for Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker)/Check { test: true }/TargetInner { name: "Matcher", doc: true, ..: with_path("D:\\Coding_Completed_2025\\Matcher_2026\\Matchmaker\\src\\main.rs", Edition2021) }
-   0.379060000s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\Matcher-419ab0cf76d483d7\test-bin-Matcher`
+   0.230375900s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint: fingerprint error for Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker)/Check { test: true }/TargetInner { name: "Matcher", doc: true, ..: with_path("D:\\Coding_Completed_2025\\Matcher_2026\\Matchmaker\\src\\main.rs", Edition2021) }
+   0.230402200s  INFO prepare_target{force=false package_id=Matcher v0.1.0 (D:\Coding_Completed_2025\Matcher_2026\Matchmaker) target="Matcher"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\Coding_Completed_2025\Matcher_2026\Matchmaker\target\debug\.fingerprint\Matcher-0c146fff89e5fa2d\test-bin-Matcher`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -454,7 +454,7 @@ Caused by:
   --- stderr
   Missing dependency: cmake
 
-  thread 'main' (35472) panicked at C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-lc-sys-0.35.0\builder\main.rs:445:40:
+  thread 'main' (44520) panicked at C:\Users\renar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-lc-sys-0.35.0\builder\main.rs:445:40:
   called `Result::unwrap()` on an `Err` value: "Required build dependency is missing. Halting build."
   stack backtrace:
      0: std::panicking::panic_handler
