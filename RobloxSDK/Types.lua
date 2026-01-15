@@ -38,6 +38,12 @@ export type Match = {
 	PlayerIds: { PlayerId },
 }
 
+export type GameMode = {
+	Name: string,
+	MinPlayers: number,
+	MaxPlayers: number,
+}
+
 export type MatchCreatedCallback = (Match: Match) -> ()
 
 export type ClientConfiguration = {

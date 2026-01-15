@@ -70,60 +70,104 @@ impl Matchmaker {
             return Vec::new();
         }
 
+        let TicketsByMode = self.GroupByGameMode(Tickets);
+        let mut AllMatches: Vec<Vec<MatchmakingTicket>> = Vec::new();
+
+        for (_ModeName, ModeIndices) in TicketsByMode {
+            let ModeMatches = self.FindMatchesForMode(Tickets, &ModeIndices);
+            AllMatches.extend(ModeMatches);
+        }
+
+        AllMatches
+    }
+
+    fn GroupByGameMode(&self, Tickets: &[MatchmakingTicket]) -> HashMap<String, Vec<usize>> {
+        let mut Groups: HashMap<String, Vec<usize>> = HashMap::new();
+
+        for (Index, Ticket) in Tickets.iter().enumerate() {
+            Groups
+                .entry(Ticket.GameMode.Name.clone())
+                .or_insert_with(Vec::new)
+                .push(Index);
+        }
+
+        Groups
+    }
+
+    fn FindMatchesForMode(
+        &self,
+        AllTickets: &[MatchmakingTicket],
+        ModeIndices: &[usize],
+    ) -> Vec<Vec<MatchmakingTicket>> {
+        if ModeIndices.is_empty() {
+            return Vec::new();
+        }
+
+        let FirstTicket = &AllTickets[ModeIndices[0]];
+        let MinPlayers = FirstTicket.GameMode.MinPlayers;
+        let MaxPlayers = FirstTicket.GameMode.MaxPlayers;
+
         let BucketSize = self.Configuration.RatingBucketSize;
-        let EstimatedMatches = TicketCount / self.Configuration.MinimumPlayersPerMatch as usize;
+        let EstimatedMatches = ModeIndices.len() / MinPlayers as usize;
         let mut PotentialMatches: Vec<Vec<MatchmakingTicket>> = Vec::with_capacity(EstimatedMatches.max(1));
-        let mut UsedTicketIds: HashSet<uuid::Uuid> = HashSet::with_capacity(TicketCount);
+        let mut UsedTicketIds: HashSet<uuid::Uuid> = HashSet::with_capacity(ModeIndices.len());
 
-        let RatingBuckets = self.BuildRatingBuckets(Tickets, BucketSize);
+        let ModeTickets: Vec<&MatchmakingTicket> = ModeIndices.iter().map(|&I| &AllTickets[I]).collect();
+        let RatingBuckets = self.BuildRatingBucketsForMode(&ModeTickets, BucketSize);
 
-        for BaseIndex in 0..TicketCount {
-            let BaseTicket = &Tickets[BaseIndex];
+        for (LocalIndex, &GlobalIndex) in ModeIndices.iter().enumerate() {
+            let BaseTicket = &AllTickets[GlobalIndex];
 
             if UsedTicketIds.contains(&BaseTicket.TicketId) {
                 continue;
             }
 
-            let mut MatchGroupIndices: Vec<usize> = Vec::with_capacity(self.Configuration.MaximumPlayersPerMatch as usize);
-            MatchGroupIndices.push(BaseIndex);
+            let mut MatchGroupIndices: Vec<usize> = Vec::with_capacity(MaxPlayers as usize);
+            MatchGroupIndices.push(GlobalIndex);
             let mut CurrentPlayerCount: u32 = BaseTicket.Members.len() as u32;
 
-            let CandidateIndices = self.GetCandidatesFromBuckets(
+            let CandidateLocalIndices = self.GetCandidatesFromBucketsLocal(
                 BaseTicket,
                 &RatingBuckets,
                 BucketSize,
             );
 
-            for CandidateIndex in CandidateIndices {
-                if CandidateIndex <= BaseIndex {
+            for LocalCandidateIndex in CandidateLocalIndices {
+                if LocalCandidateIndex <= LocalIndex {
                     continue;
                 }
 
-                let CandidateTicket = &Tickets[CandidateIndex];
+                let GlobalCandidateIndex = ModeIndices[LocalCandidateIndex];
+                let CandidateTicket = &AllTickets[GlobalCandidateIndex];
+
+                if UsedTicketIds.contains(&CandidateTicket.TicketId) {
+                    continue;
+                }
+
                 let CandidateSize: u32 = CandidateTicket.Members.len() as u32;
 
-                if CurrentPlayerCount + CandidateSize > self.Configuration.MaximumPlayersPerMatch {
+                if CurrentPlayerCount + CandidateSize > MaxPlayers {
                     continue;
                 }
 
                 if self.AreCompatible(BaseTicket, CandidateTicket) && self.HaveRegionOverlap(BaseTicket, CandidateTicket) {
-                    MatchGroupIndices.push(CandidateIndex);
+                    MatchGroupIndices.push(GlobalCandidateIndex);
                     CurrentPlayerCount += CandidateSize;
 
-                    if CurrentPlayerCount >= self.Configuration.MaximumPlayersPerMatch {
+                    if CurrentPlayerCount >= MaxPlayers {
                         break;
                     }
                 }
             }
 
-            if CurrentPlayerCount >= self.Configuration.MinimumPlayersPerMatch {
+            if CurrentPlayerCount >= MinPlayers {
                 for &Idx in &MatchGroupIndices {
-                    UsedTicketIds.insert(Tickets[Idx].TicketId);
+                    UsedTicketIds.insert(AllTickets[Idx].TicketId);
                 }
 
                 let MatchGroup: Vec<MatchmakingTicket> = MatchGroupIndices
                     .iter()
-                    .map(|&Idx| Tickets[Idx].clone())
+                    .map(|&Idx| AllTickets[Idx].clone())
                     .collect();
 
                 PotentialMatches.push(MatchGroup);
@@ -147,6 +191,47 @@ impl Matchmaker {
         }
 
         Buckets
+    }
+
+    fn BuildRatingBucketsForMode(&self, Tickets: &[&MatchmakingTicket], BucketSize: f64) -> HashMap<BucketId, Vec<usize>> {
+        let mut Buckets: HashMap<BucketId, Vec<usize>> = HashMap::new();
+
+        for (LocalIndex, Ticket) in Tickets.iter().enumerate() {
+            let MinBucket = (Ticket.MinimumMatchmakingRating / BucketSize).floor() as BucketId;
+            let MaxBucket = (Ticket.MaximumMatchmakingRating / BucketSize).floor() as BucketId;
+
+            for Bucket in MinBucket..=MaxBucket {
+                Buckets.entry(Bucket).or_insert_with(|| Vec::with_capacity(64)).push(LocalIndex);
+            }
+        }
+
+        Buckets
+    }
+
+    fn GetCandidatesFromBucketsLocal(
+        &self,
+        BaseTicket: &MatchmakingTicket,
+        Buckets: &HashMap<BucketId, Vec<usize>>,
+        BucketSize: f64,
+    ) -> Vec<usize> {
+        let MinBucket = (BaseTicket.MinimumMatchmakingRating / BucketSize).floor() as BucketId;
+        let MaxBucket = (BaseTicket.MaximumMatchmakingRating / BucketSize).floor() as BucketId;
+
+        let mut Candidates: Vec<usize> = Vec::with_capacity(128);
+        let mut SeenIndices: HashSet<usize> = HashSet::with_capacity(128);
+
+        for Bucket in MinBucket..=MaxBucket {
+            if let Some(Indices) = Buckets.get(&Bucket) {
+                for &Idx in Indices {
+                    if !SeenIndices.contains(&Idx) {
+                        SeenIndices.insert(Idx);
+                        Candidates.push(Idx);
+                    }
+                }
+            }
+        }
+
+        Candidates
     }
 
     fn GetCandidatesFromBuckets(

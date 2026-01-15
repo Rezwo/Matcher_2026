@@ -35,7 +35,7 @@ use subtle::ConstantTimeEq;
 use crate::Types::{
     MatchmakingTicket, PartyMember, MatchmakingConfiguration, PartyMembers,
     SubmitTicketRequest, HealthResponse, ErrorResponse,
-    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics, TicketStatus
+    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics, TicketStatus, GameMode
 };
 use crate::Configurations::GetStandardConfiguration;
 use crate::Matchmaker::Matchmaker as MatchmakingLogic;
@@ -510,6 +510,8 @@ async fn SubmitTicket(
 
     let Members: PartyMembers = Request.Members.into_iter().collect();
 
+    let RequestedGameMode: GameMode = Request.GameMode.unwrap_or_default();
+
     let NewTicket: MatchmakingTicket = MatchmakingTicket {
         TicketId,
         Members,
@@ -521,6 +523,7 @@ async fn SubmitTicket(
         MinimumMatchmakingRating: AverageRating - InitialRange,
         MaximumMatchmakingRating: AverageRating + InitialRange,
         Status: TicketStatus::Queued,
+        GameMode: RequestedGameMode,
     };
 
     let mut Connection = Data.RedisPool.get().await.map_err(|_| (
@@ -546,7 +549,7 @@ async fn SubmitTicket(
 
     Data.Metrics.TotalTicketsProcessed.fetch_add(1, Ordering::Relaxed);
 
-    info!("+ Party Ticket Queued: {} (Size: {}, Region: {})", TicketId, NewTicket.Members.len(), PreferredRegion);
+    info!("+ Party Ticket Queued: {} (Size: {}, Region: {}, Mode: {})", TicketId, NewTicket.Members.len(), PreferredRegion, NewTicket.GameMode.Name);
     Ok(AxumJson(TicketId))
 }
 

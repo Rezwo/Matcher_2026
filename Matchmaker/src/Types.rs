@@ -11,6 +11,23 @@ pub type MatchmakingRating = f64;
 pub type Region = String;
 pub type PartyMembers = SmallVec<[PartyMember; 4]>;
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub struct GameMode {
+    pub Name: String,
+    pub MinPlayers: u32,
+    pub MaxPlayers: u32,
+}
+
+impl Default for GameMode {
+    fn default() -> Self {
+        Self {
+            Name: "FreeForAll".to_string(),
+            MinPlayers: 1,
+            MaxPlayers: 12,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PartyMember {
     pub PlayerId: PlayerId,
@@ -22,6 +39,7 @@ pub struct PartyMember {
 pub struct SubmitTicketRequest {
     pub Members: Vec<PartyMember>,
     pub PreferredRegion: Option<String>,
+    pub GameMode: Option<GameMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +67,8 @@ pub struct MatchmakingTicket {
     pub MaximumMatchmakingRating: MatchmakingRating,
     #[serde(default)]
     pub Status: TicketStatus,
+    #[serde(default)]
+    pub GameMode: GameMode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

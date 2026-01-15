@@ -18,6 +18,7 @@ type TicketStatus = Types.TicketStatus
 type Match = Types.Match
 type MatchCreatedCallback = Types.MatchCreatedCallback
 type ClientConfiguration = Types.ClientConfiguration
+type GameMode = Types.GameMode
 
 type MatchmakingClientInstance = {
 	Configuration: ClientConfiguration,
@@ -193,12 +194,17 @@ end
 
 function MatchmakingClient.SubmitMatchmakingTicket(
 	Self: MatchmakingClientInstance,
-	TargetParty: Party
+	TargetParty: Party,
+	TargetGameMode: GameMode?
 ): MatchmakingResult
-	local RequestBody = {
+	local RequestBody: { [string]: any } = {
 		Members = TargetParty.Members,
 		PreferredRegion = TargetParty.PreferredRegion,
 	}
+
+	if TargetGameMode then
+		RequestBody.GameMode = TargetGameMode
+	end
 
 	local Success: boolean, Response: any = Self:_MakeRequest("POST", "/submit", RequestBody)
 
@@ -352,7 +358,8 @@ function MatchmakingClient.QueuePlayer(
 	Self: MatchmakingClientInstance,
 	TargetPlayer: Player,
 	Rating: MatchmakingRating,
-	PreferredRegion: Region?
+	PreferredRegion: Region?,
+	TargetGameMode: GameMode?
 ): MatchmakingResult
 	local Party: Party = Self:CreateParty(
 		TargetPlayer.UserId,
@@ -361,8 +368,15 @@ function MatchmakingClient.QueuePlayer(
 		PreferredRegion or "NorthAmerica"
 	)
 
-	return Self:SubmitMatchmakingTicket(Party)
+	return Self:SubmitMatchmakingTicket(Party, TargetGameMode)
 end
+
+MatchmakingClient.GameModes = {
+	Solo = { Name = "1v1", MinPlayers = 2, MaxPlayers = 2 },
+	Duos = { Name = "2v2", MinPlayers = 4, MaxPlayers = 4 },
+	Squads = { Name = "4v4", MinPlayers = 8, MaxPlayers = 8 },
+	FreeForAll = { Name = "FreeForAll", MinPlayers = 1, MaxPlayers = 12 },
+}
 
 function MatchmakingClient.DequeuePlayer(
 	Self: MatchmakingClientInstance,
