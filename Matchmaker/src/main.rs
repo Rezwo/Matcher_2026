@@ -505,6 +505,12 @@ async fn SendMatchToRobloxWithRetry(
 
     let Payload: serde_json::Value = json!({ "message": MessageBody });
 
+ // >>>>>>>>> PASTE HERE <<<<<<<<<
+    info!("DEBUG: Sending to URL: {}", Url);
+    info!("DEBUG: Payload: {}", Payload.to_string());
+    // Check if the key exists and print its length (don't print the actual key for security)
+    info!("DEBUG: API Key Length: {}", Config.RobloxApiKey.len()); 
+
     loop {
         CurrentAttempt += 1;
 
@@ -521,6 +527,7 @@ async fn SendMatchToRobloxWithRetry(
                 info!(">>> Match {} notification sent to Roblox.", MatchId);
                 return Ok(());
             }
+            
             Ok(Res) => warn!("Attempt {} failed (Status {}): {}", CurrentAttempt, Res.status(), MatchId),
             Err(Error) => warn!("Attempt {} failed (Error): {}", CurrentAttempt, Error),
         }
