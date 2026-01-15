@@ -16,9 +16,13 @@ use axum::{
 use bb8::Pool;
 use bb8_redis::RedisConnectionManager;
 use chrono::Utc;
-use parking_lot::RwLock;
+use dashmap::DashMap;
+use governor::{Quota, RateLimiter};
+use governor::clock::DefaultClock;
+use governor::state::{InMemoryState, NotKeyed};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::time::{interval, Duration, sleep};
@@ -29,7 +33,7 @@ use tracing::{info, warn, error};
 use subtle::ConstantTimeEq;
 
 use crate::Types::{
-    MatchmakingTicket, PartyMember, MatchmakingConfiguration,
+    MatchmakingTicket, PartyMember, MatchmakingConfiguration, PartyMembers,
     SubmitTicketRequest, HealthResponse, ErrorResponse,
     TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics, TicketStatus
 };
@@ -37,6 +41,9 @@ use crate::Configurations::GetStandardConfiguration;
 use crate::Matchmaker::Matchmaker as MatchmakingLogic;
 
 const REDIS_TICKET_KEY: &str = "MATCHMAKING_QUEUES";
+const REDIS_QUEUE_ZSET: &str = "MATCHMAKING_QUEUE_ORDER";
+
+type SubmitRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 struct AppState {
     pub RedisPool: Pool<RedisConnectionManager>,
@@ -46,7 +53,8 @@ struct AppState {
     pub ShutdownNotify: Notify,
     pub Metrics: MatchmakerMetrics,
     pub CurrentQueueSize: AtomicU64,
-    pub QueuePositions: RwLock<HashMap<Uuid, usize>>,
+    pub QueuePositions: DashMap<Uuid, usize>,
+    pub SubmitLimiter: SubmitRateLimiter,
 }
 
 fn ConstantTimeCompare(A: &str, B: &str) -> bool {
@@ -124,6 +132,8 @@ async fn main() {
         .build()
         .expect("Failed to create HTTP client");
 
+    let SubmitLimiter = RateLimiter::direct(Quota::per_second(NonZeroU32::new(100).unwrap()));
+
     let SharedState: Arc<AppState> = Arc::new(AppState {
         RedisPool,
         HttpClient,
@@ -132,7 +142,8 @@ async fn main() {
         ShutdownNotify: Notify::new(),
         Metrics: MatchmakerMetrics::new(),
         CurrentQueueSize: AtomicU64::new(0),
-        QueuePositions: RwLock::new(HashMap::new()),
+        QueuePositions: DashMap::new(),
+        SubmitLimiter,
     });
 
     let LoopState: Arc<AppState> = SharedState.clone();
@@ -191,8 +202,7 @@ async fn main() {
             LoopState.CurrentQueueSize.store(Tickets.len() as u64, Ordering::Relaxed);
 
             if Tickets.is_empty() {
-                let mut Positions = LoopState.QueuePositions.write();
-                Positions.clear();
+                LoopState.QueuePositions.clear();
                 continue;
             }
 
@@ -212,8 +222,7 @@ async fn main() {
             }
 
             if Tickets.is_empty() {
-                let mut Positions = LoopState.QueuePositions.write();
-                Positions.clear();
+                LoopState.QueuePositions.clear();
                 continue;
             }
 
@@ -221,12 +230,9 @@ async fn main() {
 
             Tickets.sort_by(|A, B| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp));
 
-            {
-                let mut Positions = LoopState.QueuePositions.write();
-                Positions.clear();
-                for (Index, Ticket) in Tickets.iter().enumerate() {
-                    Positions.insert(Ticket.TicketId, Index + 1);
-                }
+            LoopState.QueuePositions.clear();
+            for (Index, Ticket) in Tickets.iter().enumerate() {
+                LoopState.QueuePositions.insert(Ticket.TicketId, Index + 1);
             }
 
             let Matches: Vec<Vec<MatchmakingTicket>> = LoopState.MatchmakerInstance.FindMatches(&Tickets);
@@ -236,7 +242,7 @@ async fn main() {
 
             for FoundMatch in &Matches {
                 let MatchId: Uuid = Uuid::new_v4();
-                let Members: Vec<PartyMember> = FoundMatch.iter().flat_map(|Ticket| Ticket.Members.clone()).collect();
+                let MatchMembers: Vec<PartyMember> = FoundMatch.iter().flat_map(|Ticket| Ticket.Members.iter().cloned()).collect();
                 let MatchedTicketIds: Vec<String> = FoundMatch.iter().map(|Ticket| Ticket.TicketId.to_string()).collect();
 
                 for Ticket in FoundMatch {
@@ -261,16 +267,13 @@ async fn main() {
                     let _: Result<(), _> = Pipeline.query_async(&mut *Connection).await;
                 }
 
-                {
-                    let mut Positions = LoopState.QueuePositions.write();
-                    for Ticket in FoundMatch {
-                        Positions.remove(&Ticket.TicketId);
-                    }
+                for Ticket in FoundMatch {
+                    LoopState.QueuePositions.remove(&Ticket.TicketId);
                 }
 
                 let InternalState: Arc<AppState> = LoopState.clone();
                 tokio::spawn(async move {
-                    match SendMatchToRobloxWithRetry(MatchId, Members, InternalState.clone()).await {
+                    match SendMatchToRobloxWithRetry(MatchId, MatchMembers, InternalState.clone()).await {
                         Ok(_) => {
                             InternalState.Metrics.TotalMatchesCreated.fetch_add(1, Ordering::Relaxed);
 
@@ -406,10 +409,7 @@ async fn GetTicketStatus(
     let CurrentTimestamp = Utc::now().timestamp();
     let WaitTimeSeconds = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp);
 
-    let QueuePosition = {
-        let Positions = Data.QueuePositions.read();
-        Positions.get(&TicketId).copied()
-    };
+    let QueuePosition = Data.QueuePositions.get(&TicketId).map(|V| *V);
 
     let EstimatedWaitSeconds = if Data.Metrics.GetAverageWaitTime() > 0.0 {
         Some((Data.Metrics.GetAverageWaitTime() * QueuePosition.unwrap_or(1) as f64) as i64)
@@ -433,6 +433,13 @@ async fn SubmitTicket(
     AxumState(Data): AxumState<Arc<AppState>>,
     AxumJson(Request): AxumJson<SubmitTicketRequest>,
 ) -> Result<AxumJson<Uuid>, (StatusCode, AxumJson<ErrorResponse>)> {
+    if Data.SubmitLimiter.check().is_err() {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            AxumJson(ErrorResponse { Error: "Rate limit exceeded. Try again later.".to_string() }),
+        ));
+    }
+
     let Config = &Data.MatchmakerInstance.Configuration;
 
     if Request.Members.is_empty() {
@@ -480,9 +487,11 @@ async fn SubmitTicket(
     let mut AllowedRegions: HashSet<String> = HashSet::new();
     AllowedRegions.insert(PreferredRegion.clone());
 
+    let Members: PartyMembers = Request.Members.into_iter().collect();
+
     let NewTicket: MatchmakingTicket = MatchmakingTicket {
         TicketId,
-        Members: Request.Members,
+        Members,
         AverageMatchmakingRating: AverageRating,
         PreferredRegion: PreferredRegion.clone(),
         AllowedRegions,
