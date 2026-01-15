@@ -22,6 +22,18 @@ pub struct SubmitTicketRequest {
     pub PreferredRegion: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TicketStatus {
+    Queued,
+    Matched,
+}
+
+impl Default for TicketStatus {
+    fn default() -> Self {
+        TicketStatus::Queued
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MatchmakingTicket {
     pub TicketId: Uuid,
@@ -33,6 +45,8 @@ pub struct MatchmakingTicket {
     pub SearchExpansionLevel: u32,
     pub MinimumMatchmakingRating: MatchmakingRating,
     pub MaximumMatchmakingRating: MatchmakingRating,
+    #[serde(default)]
+    pub Status: TicketStatus,
 }
 
 #[derive(Debug, Clone)]

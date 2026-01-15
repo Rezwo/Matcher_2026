@@ -16,7 +16,9 @@ use axum::{
 use bb8::Pool;
 use bb8_redis::RedisConnectionManager;
 use chrono::Utc;
-use std::collections::HashSet;
+use parking_lot::RwLock;
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::time::{interval, Duration, sleep};
@@ -29,7 +31,7 @@ use subtle::ConstantTimeEq;
 use crate::Types::{
     MatchmakingTicket, PartyMember, MatchmakingConfiguration,
     SubmitTicketRequest, HealthResponse, ErrorResponse,
-    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics
+    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics, TicketStatus
 };
 use crate::Configurations::GetStandardConfiguration;
 use crate::Matchmaker::Matchmaker as MatchmakingLogic;
@@ -44,6 +46,7 @@ struct AppState {
     pub ShutdownNotify: Notify,
     pub Metrics: MatchmakerMetrics,
     pub CurrentQueueSize: AtomicU64,
+    pub QueuePositions: RwLock<HashMap<Uuid, usize>>,
 }
 
 fn ConstantTimeCompare(A: &str, B: &str) -> bool {
@@ -129,6 +132,7 @@ async fn main() {
         ShutdownNotify: Notify::new(),
         Metrics: MatchmakerMetrics::new(),
         CurrentQueueSize: AtomicU64::new(0),
+        QueuePositions: RwLock::new(HashMap::new()),
     });
 
     let LoopState: Arc<AppState> = SharedState.clone();
@@ -152,20 +156,43 @@ async fn main() {
                 }
             };
 
-            let RawTickets: Vec<String> = redis::cmd("HVALS")
-                .arg(REDIS_TICKET_KEY)
-                .query_async(&mut *Connection)
-                .await
-                .unwrap_or_default();
+            let mut RawTickets: Vec<String> = Vec::with_capacity(256);
+            let mut Cursor: u64 = 0;
+            loop {
+                let ScanResult: (u64, Vec<(String, String)>) = redis::cmd("HSCAN")
+                    .arg(REDIS_TICKET_KEY)
+                    .arg(Cursor)
+                    .arg("COUNT")
+                    .arg(100)
+                    .query_async(&mut *Connection)
+                    .await
+                    .unwrap_or((0, Vec::new()));
 
-            let mut Tickets: Vec<MatchmakingTicket> = RawTickets
-                .iter()
+                Cursor = ScanResult.0;
+                for (_, Value) in ScanResult.1 {
+                    RawTickets.push(Value);
+                }
+
+                if Cursor == 0 {
+                    break;
+                }
+            }
+
+            let AllTickets: Vec<MatchmakingTicket> = RawTickets
+                .par_iter()
                 .filter_map(|Serialized| serde_json::from_str::<MatchmakingTicket>(Serialized).ok())
+                .collect();
+
+            let mut Tickets: Vec<MatchmakingTicket> = AllTickets
+                .into_iter()
+                .filter(|T| T.Status == TicketStatus::Queued)
                 .collect();
 
             LoopState.CurrentQueueSize.store(Tickets.len() as u64, Ordering::Relaxed);
 
             if Tickets.is_empty() {
+                let mut Positions = LoopState.QueuePositions.write();
+                Positions.clear();
                 continue;
             }
 
@@ -185,11 +212,24 @@ async fn main() {
             }
 
             if Tickets.is_empty() {
+                let mut Positions = LoopState.QueuePositions.write();
+                Positions.clear();
                 continue;
             }
 
             LoopState.MatchmakerInstance.ExpandTickets(&mut Tickets);
-            let Matches: Vec<Vec<MatchmakingTicket>> = LoopState.MatchmakerInstance.FindMatches(&mut Tickets);
+
+            Tickets.sort_by(|A, B| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp));
+
+            {
+                let mut Positions = LoopState.QueuePositions.write();
+                Positions.clear();
+                for (Index, Ticket) in Tickets.iter().enumerate() {
+                    Positions.insert(Ticket.TicketId, Index + 1);
+                }
+            }
+
+            let Matches: Vec<Vec<MatchmakingTicket>> = LoopState.MatchmakerInstance.FindMatches(&Tickets);
             let MatchedIds: HashSet<Uuid> = LoopState.MatchmakerInstance.GetMatchedTicketIds(&Matches);
 
             let CurrentTimestamp = Utc::now().timestamp();
@@ -205,6 +245,29 @@ async fn main() {
                     LoopState.Metrics.MatchedTicketCount.fetch_add(1, Ordering::Relaxed);
                 }
 
+                {
+                    let mut Pipeline = redis::pipe();
+                    for Ticket in FoundMatch {
+                        let mut MarkedTicket = Ticket.clone();
+                        MarkedTicket.Status = TicketStatus::Matched;
+                        if let Ok(SerializedTicket) = serde_json::to_string(&MarkedTicket) {
+                            Pipeline.cmd("HSET")
+                                .arg(REDIS_TICKET_KEY)
+                                .arg(Ticket.TicketId.to_string())
+                                .arg(SerializedTicket)
+                                .ignore();
+                        }
+                    }
+                    let _: Result<(), _> = Pipeline.query_async(&mut *Connection).await;
+                }
+
+                {
+                    let mut Positions = LoopState.QueuePositions.write();
+                    for Ticket in FoundMatch {
+                        Positions.remove(&Ticket.TicketId);
+                    }
+                }
+
                 let InternalState: Arc<AppState> = LoopState.clone();
                 tokio::spawn(async move {
                     match SendMatchToRobloxWithRetry(MatchId, Members, InternalState.clone()).await {
@@ -214,13 +277,20 @@ async fn main() {
                             if let Ok(mut Con) = InternalState.RedisPool.get().await {
                                 let _: Result<(), _> = redis::cmd("HDEL")
                                     .arg(REDIS_TICKET_KEY)
-                                    .arg(MatchedTicketIds)
+                                    .arg(MatchedTicketIds.clone())
                                     .query_async(&mut *Con)
                                     .await;
                             }
                         }
                         Err(Error) => {
-                            error!("FATAL: Match notification failed: {}", Error);
+                            error!("FATAL: Match notification failed for {}: {}", MatchId, Error);
+                            if let Ok(mut Con) = InternalState.RedisPool.get().await {
+                                let _: Result<(), _> = redis::cmd("HDEL")
+                                    .arg(REDIS_TICKET_KEY)
+                                    .arg(MatchedTicketIds)
+                                    .query_async(&mut *Con)
+                                    .await;
+                            }
                         }
                     }
                 });
@@ -328,21 +398,18 @@ async fn GetTicketStatus(
         AxumJson(ErrorResponse { Error: "Failed to parse ticket data".to_string() }),
     ))?;
 
+    let TicketStatusStr = match Ticket.Status {
+        TicketStatus::Queued => "queued",
+        TicketStatus::Matched => "matched",
+    };
+
     let CurrentTimestamp = Utc::now().timestamp();
     let WaitTimeSeconds = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp);
 
-    let AllTicketsJson: Vec<String> = redis::cmd("HVALS")
-        .arg(REDIS_TICKET_KEY)
-        .query_async(&mut *Connection)
-        .await
-        .unwrap_or_default();
-
-    let AllTickets: Vec<MatchmakingTicket> = AllTicketsJson
-        .iter()
-        .filter_map(|S| serde_json::from_str(S).ok())
-        .collect();
-
-    let QueuePosition = Data.MatchmakerInstance.GetQueuePosition(&AllTickets, TicketId);
+    let QueuePosition = {
+        let Positions = Data.QueuePositions.read();
+        Positions.get(&TicketId).copied()
+    };
 
     let EstimatedWaitSeconds = if Data.Metrics.GetAverageWaitTime() > 0.0 {
         Some((Data.Metrics.GetAverageWaitTime() * QueuePosition.unwrap_or(1) as f64) as i64)
@@ -352,7 +419,7 @@ async fn GetTicketStatus(
 
     let Response = TicketStatusResponse {
         TicketId,
-        Status: "queued".to_string(),
+        Status: TicketStatusStr.to_string(),
         QueuePosition,
         WaitTimeSeconds,
         ExpansionLevel: Ticket.SearchExpansionLevel,
@@ -423,6 +490,7 @@ async fn SubmitTicket(
         SearchExpansionLevel: 0,
         MinimumMatchmakingRating: AverageRating - InitialRange,
         MaximumMatchmakingRating: AverageRating + InitialRange,
+        Status: TicketStatus::Queued,
     };
 
     let mut Connection = Data.RedisPool.get().await.map_err(|_| (
