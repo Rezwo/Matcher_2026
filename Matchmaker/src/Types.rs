@@ -81,6 +81,7 @@ pub struct MatchmakingConfiguration {
     pub DefaultRegion: String,
     pub ValidRegions: HashSet<String>,
     pub TicketTtlSeconds: i64,
+    pub RatingBucketSize: f64,
 }
 
 #[derive(Debug, Serialize)]
