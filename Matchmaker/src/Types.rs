@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use serde::{Serialize, Deserialize};
+use smallvec::SmallVec;
 use uuid::Uuid;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
@@ -8,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 pub type PlayerId = u64;
 pub type MatchmakingRating = f64;
 pub type Region = String;
+pub type PartyMembers = SmallVec<[PartyMember; 4]>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PartyMember {
@@ -37,7 +39,7 @@ impl Default for TicketStatus {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MatchmakingTicket {
     pub TicketId: Uuid,
-    pub Members: Vec<PartyMember>,
+    pub Members: PartyMembers,
     pub AverageMatchmakingRating: MatchmakingRating,
     pub PreferredRegion: Region,
     pub AllowedRegions: HashSet<Region>,
@@ -47,6 +49,16 @@ pub struct MatchmakingTicket {
     pub MaximumMatchmakingRating: MatchmakingRating,
     #[serde(default)]
     pub Status: TicketStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TicketIndexEntry {
+    pub TicketId: Uuid,
+    pub MinRating: f64,
+    pub MaxRating: f64,
+    pub Timestamp: i64,
+    pub PlayerCount: u32,
+    pub Regions: SmallVec<[String; 2]>,
 }
 
 #[derive(Debug, Clone)]
