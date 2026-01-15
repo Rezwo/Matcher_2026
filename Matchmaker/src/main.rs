@@ -19,7 +19,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use governor::{Quota, RateLimiter};
 use governor::clock::DefaultClock;
-use governor::state::{InMemoryState, NotKeyed};
+use governor::state::{InMemoryState, NotKeyed, keyed::DashMapStateStore};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
@@ -44,6 +44,7 @@ const REDIS_TICKET_KEY: &str = "MATCHMAKING_QUEUES";
 const REDIS_QUEUE_ZSET: &str = "MATCHMAKING_QUEUE_ORDER";
 
 type SubmitRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+type RegionalRateLimiter = RateLimiter<String, DashMapStateStore<String>, DefaultClock>;
 
 struct AppState {
     pub RedisPool: Pool<RedisConnectionManager>,
@@ -55,6 +56,8 @@ struct AppState {
     pub CurrentQueueSize: AtomicU64,
     pub QueuePositions: DashMap<Uuid, usize>,
     pub SubmitLimiter: SubmitRateLimiter,
+    pub RegionalLimiter: RegionalRateLimiter,
+    pub RegionalQueueSizes: DashMap<String, u64>,
 }
 
 fn ConstantTimeCompare(A: &str, B: &str) -> bool {
@@ -132,7 +135,8 @@ async fn main() {
         .build()
         .expect("Failed to create HTTP client");
 
-    let SubmitLimiter = RateLimiter::direct(Quota::per_second(NonZeroU32::new(100).unwrap()));
+    let SubmitLimiter = RateLimiter::direct(Quota::per_second(NonZeroU32::new(1000).unwrap()));
+    let RegionalLimiter = RateLimiter::dashmap(Quota::per_second(NonZeroU32::new(500).unwrap()));
 
     let SharedState: Arc<AppState> = Arc::new(AppState {
         RedisPool,
@@ -144,6 +148,8 @@ async fn main() {
         CurrentQueueSize: AtomicU64::new(0),
         QueuePositions: DashMap::new(),
         SubmitLimiter,
+        RegionalLimiter,
+        RegionalQueueSizes: DashMap::new(),
     });
 
     let LoopState: Arc<AppState> = SharedState.clone();
@@ -436,11 +442,26 @@ async fn SubmitTicket(
     if Data.SubmitLimiter.check().is_err() {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
-            AxumJson(ErrorResponse { Error: "Rate limit exceeded. Try again later.".to_string() }),
+            AxumJson(ErrorResponse { Error: "Global rate limit exceeded. Try again later.".to_string() }),
         ));
     }
 
     let Config = &Data.MatchmakerInstance.Configuration;
+
+    let PreferredRegionForLimit: String = Request.PreferredRegion
+        .as_ref()
+        .filter(|R| Config.ValidRegions.contains(*R))
+        .cloned()
+        .unwrap_or_else(|| Config.DefaultRegion.clone());
+
+    if Data.RegionalLimiter.check_key(&PreferredRegionForLimit).is_err() {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            AxumJson(ErrorResponse {
+                Error: format!("Regional rate limit exceeded for {}. Try again later.", PreferredRegionForLimit)
+            }),
+        ));
+    }
 
     if Request.Members.is_empty() {
         return Err((

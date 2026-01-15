@@ -66,5 +66,8 @@ pub fn GetStandardConfiguration() -> MatchmakingConfiguration {
         TicketTtlSeconds: GetEnvOrDefault("TICKET_TTL_SECONDS", "300")
             .parse()
             .expect("TICKET_TTL_SECONDS must be a valid i64"),
+        RatingBucketSize: GetEnvOrDefault("RATING_BUCKET_SIZE", "100.0")
+            .parse()
+            .expect("RATING_BUCKET_SIZE must be a valid f64"),
     }
 }
