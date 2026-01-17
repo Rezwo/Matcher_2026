@@ -69,5 +69,8 @@ pub fn GetStandardConfiguration() -> MatchmakingConfiguration {
         RatingBucketSize: GetEnvOrDefault("RATING_BUCKET_SIZE", "100.0")
             .parse()
             .expect("RATING_BUCKET_SIZE must be a valid f64"),
+        DebugMode: GetEnvOrDefault("DEBUG", "false")
+            .parse()
+            .unwrap_or(false),
     }
 }

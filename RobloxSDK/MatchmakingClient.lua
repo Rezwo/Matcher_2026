@@ -18,6 +18,9 @@ type TicketStatus = Types.TicketStatus
 type Match = Types.Match
 type MatchCreatedCallback = Types.MatchCreatedCallback
 type ClientConfiguration = Types.ClientConfiguration
+type GameMode = Types.GameMode
+type CustomMatchData = Types.CustomMatchData
+type SubmitOptions = Types.SubmitOptions
 
 type MatchmakingClientInstance = {
 	Configuration: ClientConfiguration,
@@ -193,12 +196,25 @@ end
 
 function MatchmakingClient.SubmitMatchmakingTicket(
 	Self: MatchmakingClientInstance,
-	TargetParty: Party
+	TargetParty: Party,
+	Options: SubmitOptions?
 ): MatchmakingResult
-	local RequestBody = {
+	local RequestBody: { [string]: any } = {
 		Members = TargetParty.Members,
 		PreferredRegion = TargetParty.PreferredRegion,
 	}
+
+	if Options then
+		if Options.GameMode then
+			RequestBody.GameMode = Options.GameMode
+		end
+		if Options.Priority then
+			RequestBody.Priority = Options.Priority
+		end
+		if Options.CustomData then
+			RequestBody.CustomData = Options.CustomData
+		end
+	end
 
 	local Success: boolean, Response: any = Self:_MakeRequest("POST", "/submit", RequestBody)
 
@@ -352,7 +368,8 @@ function MatchmakingClient.QueuePlayer(
 	Self: MatchmakingClientInstance,
 	TargetPlayer: Player,
 	Rating: MatchmakingRating,
-	PreferredRegion: Region?
+	PreferredRegion: Region?,
+	Options: SubmitOptions?
 ): MatchmakingResult
 	local Party: Party = Self:CreateParty(
 		TargetPlayer.UserId,
@@ -361,8 +378,23 @@ function MatchmakingClient.QueuePlayer(
 		PreferredRegion or "NorthAmerica"
 	)
 
-	return Self:SubmitMatchmakingTicket(Party)
+	return Self:SubmitMatchmakingTicket(Party, Options)
 end
+
+MatchmakingClient.GameModes = {
+	Solo = { Name = "1v1", MinPlayers = 2, MaxPlayers = 2, AllowBackfill = false },
+	Duos = { Name = "2v2", MinPlayers = 4, MaxPlayers = 4, AllowBackfill = false },
+	Squads = { Name = "4v4", MinPlayers = 8, MaxPlayers = 8, AllowBackfill = false },
+	FreeForAll = { Name = "FreeForAll", MinPlayers = 1, MaxPlayers = 12, AllowBackfill = true },
+}
+
+-- Priority levels for premium/VIP matching
+MatchmakingClient.Priority = {
+	Normal = 0,
+	High = 50,
+	Premium = 100,
+	VIP = 200,
+}
 
 function MatchmakingClient.DequeuePlayer(
 	Self: MatchmakingClientInstance,

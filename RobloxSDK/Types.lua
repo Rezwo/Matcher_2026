@@ -38,6 +38,25 @@ export type Match = {
 	PlayerIds: { PlayerId },
 }
 
+export type GameMode = {
+	Name: string,
+	MinPlayers: number,
+	MaxPlayers: number,
+	AllowBackfill: boolean?, -- Optional: allow joining in-progress matches
+}
+
+export type CustomMatchData = {
+	MapPreference: string?,
+	GameSettings: { [string]: any }?,
+	Tags: { string }?,
+}
+
+export type SubmitOptions = {
+	GameMode: GameMode?,
+	Priority: number?, -- Higher priority = matched sooner (default: 0)
+	CustomData: CustomMatchData?,
+}
+
 export type MatchCreatedCallback = (Match: Match) -> ()
 
 export type ClientConfiguration = {

@@ -1,1 +1,25 @@
+# Build artifacts
 /Matchmaker/target/
+
+# Environment files (never commit secrets)
+.env
+.env.*
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local config
+local.toml
+config.local.*
