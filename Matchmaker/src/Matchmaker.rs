@@ -3,6 +3,7 @@
 
 use crate::Types::{MatchmakingTicket, MatchmakingConfiguration};
 use chrono::Utc;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 pub struct Matchmaker {
@@ -71,12 +72,13 @@ impl Matchmaker {
         }
 
         let TicketsByMode = self.GroupByGameMode(Tickets);
-        let mut AllMatches: Vec<Vec<MatchmakingTicket>> = Vec::new();
 
-        for (_ModeName, ModeIndices) in TicketsByMode {
-            let ModeMatches = self.FindMatchesForMode(Tickets, &ModeIndices);
-            AllMatches.extend(ModeMatches);
-        }
+        let AllMatches: Vec<Vec<MatchmakingTicket>> = TicketsByMode
+            .par_iter()
+            .flat_map(|(_ModeName, ModeIndices)| {
+                self.FindMatchesForMode(Tickets, ModeIndices)
+            })
+            .collect();
 
         AllMatches
     }

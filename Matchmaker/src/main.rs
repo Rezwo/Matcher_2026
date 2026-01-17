@@ -21,7 +21,7 @@ use governor::{Quota, RateLimiter};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed, keyed::DashMapStateStore};
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -35,7 +35,7 @@ use subtle::ConstantTimeEq;
 use crate::Types::{
     MatchmakingTicket, PartyMember, MatchmakingConfiguration, PartyMembers,
     SubmitTicketRequest, HealthResponse, ErrorResponse,
-    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics, TicketStatus, GameMode
+    TicketStatusResponse, MetricsSnapshot, MatchmakerMetrics, TicketStatus, GameMode,
 };
 use crate::Configurations::GetStandardConfiguration;
 use crate::Matchmaker::Matchmaker as MatchmakingLogic;
@@ -234,7 +234,11 @@ async fn main() {
 
             LoopState.MatchmakerInstance.ExpandTickets(&mut Tickets);
 
-            Tickets.sort_by(|A, B| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp));
+            // Sort by priority (higher first), then by timestamp (earlier first)
+            Tickets.sort_by(|A, B| {
+                B.Priority.cmp(&A.Priority)
+                    .then_with(|| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp))
+            });
 
             LoopState.QueuePositions.clear();
             for (Index, Ticket) in Tickets.iter().enumerate() {
@@ -373,6 +377,7 @@ async fn GetMetricsSnapshot(
         TotalTicketsExpired: Data.Metrics.TotalTicketsExpired.load(Ordering::Relaxed),
         AverageWaitTimeSeconds: Data.Metrics.GetAverageWaitTime(),
         MatchesLastMinute: 0,
+        ModeMetrics: HashMap::new(), // Per-mode metrics can be tracked separately
     };
 
     (StatusCode::OK, AxumJson(Snapshot))
@@ -524,6 +529,8 @@ async fn SubmitTicket(
         MaximumMatchmakingRating: AverageRating + InitialRange,
         Status: TicketStatus::Queued,
         GameMode: RequestedGameMode,
+        Priority: Request.Priority,
+        CustomData: Request.CustomData,
     };
 
     let mut Connection = Data.RedisPool.get().await.map_err(|_| (

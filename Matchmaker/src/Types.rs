@@ -16,6 +16,8 @@ pub struct GameMode {
     pub Name: String,
     pub MinPlayers: u32,
     pub MaxPlayers: u32,
+    #[serde(default)]
+    pub AllowBackfill: bool,
 }
 
 impl Default for GameMode {
@@ -24,8 +26,19 @@ impl Default for GameMode {
             Name: "FreeForAll".to_string(),
             MinPlayers: 1,
             MaxPlayers: 12,
+            AllowBackfill: false,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CustomMatchData {
+    #[serde(default)]
+    pub MapPreference: Option<String>,
+    #[serde(default)]
+    pub GameSettings: Option<serde_json::Value>,
+    #[serde(default)]
+    pub Tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,6 +53,10 @@ pub struct SubmitTicketRequest {
     pub Members: Vec<PartyMember>,
     pub PreferredRegion: Option<String>,
     pub GameMode: Option<GameMode>,
+    #[serde(default)]
+    pub Priority: u32,
+    #[serde(default)]
+    pub CustomData: Option<CustomMatchData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +86,10 @@ pub struct MatchmakingTicket {
     pub Status: TicketStatus,
     #[serde(default)]
     pub GameMode: GameMode,
+    #[serde(default)]
+    pub Priority: u32,
+    #[serde(default)]
+    pub CustomData: Option<CustomMatchData>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -102,6 +123,7 @@ pub struct MatchmakingConfiguration {
     pub ValidRegions: HashSet<String>,
     pub TicketTtlSeconds: i64,
     pub RatingBucketSize: f64,
+    pub DebugMode: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +147,14 @@ pub struct TicketStatusResponse {
     pub EstimatedWaitSeconds: Option<i64>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct ModeMetrics {
+    pub QueueSize: u64,
+    pub MatchesCreated: u64,
+    pub AverageWaitTimeSeconds: f64,
+    pub EstimatedWaitSeconds: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct MetricsSnapshot {
     pub QueueSize: u64,
@@ -133,6 +163,7 @@ pub struct MetricsSnapshot {
     pub TotalTicketsExpired: u64,
     pub AverageWaitTimeSeconds: f64,
     pub MatchesLastMinute: u64,
+    pub ModeMetrics: HashMap<String, ModeMetrics>,
 }
 
 pub struct MatchmakerMetrics {

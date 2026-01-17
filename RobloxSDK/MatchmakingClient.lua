@@ -19,6 +19,8 @@ type Match = Types.Match
 type MatchCreatedCallback = Types.MatchCreatedCallback
 type ClientConfiguration = Types.ClientConfiguration
 type GameMode = Types.GameMode
+type CustomMatchData = Types.CustomMatchData
+type SubmitOptions = Types.SubmitOptions
 
 type MatchmakingClientInstance = {
 	Configuration: ClientConfiguration,
@@ -195,15 +197,23 @@ end
 function MatchmakingClient.SubmitMatchmakingTicket(
 	Self: MatchmakingClientInstance,
 	TargetParty: Party,
-	TargetGameMode: GameMode?
+	Options: SubmitOptions?
 ): MatchmakingResult
 	local RequestBody: { [string]: any } = {
 		Members = TargetParty.Members,
 		PreferredRegion = TargetParty.PreferredRegion,
 	}
 
-	if TargetGameMode then
-		RequestBody.GameMode = TargetGameMode
+	if Options then
+		if Options.GameMode then
+			RequestBody.GameMode = Options.GameMode
+		end
+		if Options.Priority then
+			RequestBody.Priority = Options.Priority
+		end
+		if Options.CustomData then
+			RequestBody.CustomData = Options.CustomData
+		end
 	end
 
 	local Success: boolean, Response: any = Self:_MakeRequest("POST", "/submit", RequestBody)
@@ -359,7 +369,7 @@ function MatchmakingClient.QueuePlayer(
 	TargetPlayer: Player,
 	Rating: MatchmakingRating,
 	PreferredRegion: Region?,
-	TargetGameMode: GameMode?
+	Options: SubmitOptions?
 ): MatchmakingResult
 	local Party: Party = Self:CreateParty(
 		TargetPlayer.UserId,
@@ -368,14 +378,22 @@ function MatchmakingClient.QueuePlayer(
 		PreferredRegion or "NorthAmerica"
 	)
 
-	return Self:SubmitMatchmakingTicket(Party, TargetGameMode)
+	return Self:SubmitMatchmakingTicket(Party, Options)
 end
 
 MatchmakingClient.GameModes = {
-	Solo = { Name = "1v1", MinPlayers = 2, MaxPlayers = 2 },
-	Duos = { Name = "2v2", MinPlayers = 4, MaxPlayers = 4 },
-	Squads = { Name = "4v4", MinPlayers = 8, MaxPlayers = 8 },
-	FreeForAll = { Name = "FreeForAll", MinPlayers = 1, MaxPlayers = 12 },
+	Solo = { Name = "1v1", MinPlayers = 2, MaxPlayers = 2, AllowBackfill = false },
+	Duos = { Name = "2v2", MinPlayers = 4, MaxPlayers = 4, AllowBackfill = false },
+	Squads = { Name = "4v4", MinPlayers = 8, MaxPlayers = 8, AllowBackfill = false },
+	FreeForAll = { Name = "FreeForAll", MinPlayers = 1, MaxPlayers = 12, AllowBackfill = true },
+}
+
+-- Priority levels for premium/VIP matching
+MatchmakingClient.Priority = {
+	Normal = 0,
+	High = 50,
+	Premium = 100,
+	VIP = 200,
 }
 
 function MatchmakingClient.DequeuePlayer(
