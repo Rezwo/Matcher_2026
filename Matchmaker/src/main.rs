@@ -28,7 +28,6 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 use serde_json::json;
 use tracing::{info, warn, error, debug};
-use subtle::ConstantTimeEq;
 
 use crate::Types::{
     MatchmakingTicket, PartyMember, MatchmakingConfiguration, PartyMembers,
@@ -62,11 +61,21 @@ fn ConstantTimeCompare(A: &str, B: &str) -> bool {
     let ABytes = A.as_bytes();
     let BBytes = B.as_bytes();
 
-    if ABytes.len() != BBytes.len() {
-        return false;
+    // Constant-time length comparison (don't early return to avoid timing leak)
+    let LengthMatch = ABytes.len() == BBytes.len();
+
+    // Compare with padding to avoid timing leak based on length
+    let MaxLen = std::cmp::max(ABytes.len(), BBytes.len());
+    let mut Result: u8 = 0;
+
+    for i in 0..MaxLen {
+        let AByte = ABytes.get(i).copied().unwrap_or(0);
+        let BByte = BBytes.get(i).copied().unwrap_or(0);
+        Result |= AByte ^ BByte;
     }
 
-    ABytes.ct_eq(BBytes).into()
+    // Both conditions must be true: lengths match AND content matches
+    LengthMatch && Result == 0
 }
 
 async fn AuthMiddleware(
@@ -639,7 +648,8 @@ async fn SubmitTicket(
         ));
     }
 
-    // Validate each member
+    // Validate each member and check for duplicates
+    let mut SeenPlayerIds: HashSet<u64> = HashSet::new();
     for (Index, Member) in Request.Members.iter().enumerate() {
         if Member.PlayerId == 0 {
             return Err((
@@ -647,10 +657,24 @@ async fn SubmitTicket(
                 AxumJson(ErrorResponse { Error: format!("Member {} has invalid PlayerId (0)", Index) }),
             ));
         }
+        // Check for duplicate player IDs
+        if !SeenPlayerIds.insert(Member.PlayerId) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                AxumJson(ErrorResponse { Error: format!("Duplicate PlayerId {} in party", Member.PlayerId) }),
+            ));
+        }
         if Member.PlayerName.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
                 AxumJson(ErrorResponse { Error: format!("Member {} has empty PlayerName", Index) }),
+            ));
+        }
+        // Validate PlayerName length (max 256 characters)
+        if Member.PlayerName.len() > 256 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                AxumJson(ErrorResponse { Error: format!("Member {} PlayerName exceeds 256 characters", Index) }),
             ));
         }
         if Member.MatchmakingRating.is_nan() || Member.MatchmakingRating.is_infinite() {
@@ -814,12 +838,6 @@ async fn SendMatchToRobloxWithRetry(
     }).to_string();
 
     let Payload: serde_json::Value = json!({ "message": MessageBody });
-
- // >>>>>>>>> PASTE HERE <<<<<<<<<
-    info!("DEBUG: Sending to URL: {}", Url);
-    info!("DEBUG: Payload: {}", Payload.to_string());
-    // Check if the key exists and print its length (don't print the actual key for security)
-    info!("DEBUG: API Key Length: {}", Config.RobloxApiKey.len()); 
 
     loop {
         CurrentAttempt += 1;
