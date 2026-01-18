@@ -36,11 +36,11 @@ type MatchmakingClientInstance = {
 	_SubscriptionConnection: RBXScriptConnection?,
 	_PlayerRemovingConnection: RBXScriptConnection?,
 	_RetryCount: number,
-	_LastSubmitTime: number,
-	_RateLimitLocked: boolean,
+	_PlayerRateLimits: { [PlayerId]: number },
 	_PendingResubscribeThread: thread?,
 	_ActiveTaskThreads: { thread },
 	_IsDestroyed: boolean,
+	_PendingMatches: { [PlayerId]: thread },
 }
 
 -- Constants
@@ -174,11 +174,11 @@ function MatchmakingClient.New(Configuration: ClientConfiguration): MatchmakingC
 		_SubscriptionConnection = nil,
 		_PlayerRemovingConnection = nil,
 		_RetryCount = 0,
-		_LastSubmitTime = 0,
-		_RateLimitLocked = false,
+		_PlayerRateLimits = {},
 		_PendingResubscribeThread = nil,
 		_ActiveTaskThreads = {},
 		_IsDestroyed = false,
+		_PendingMatches = {},
 	}, MatchmakingClient) :: any
 
 	-- Auto-setup player tracking
@@ -338,17 +338,25 @@ function MatchmakingClient._MakeRequest(
 		end)
 
 		if Success then
-			if Response and Response.Success then
-				local DecodeSuccess: boolean, DecodedBody: any = pcall(function()
-					return HttpService:JSONDecode(Response.Body)
-				end)
-				if DecodeSuccess then
-					return true, DecodedBody, nil
+			-- Null-safe response handling
+			if Response and type(Response) == "table" and Response.Success then
+				local ResponseBody = Response.Body
+				if ResponseBody and type(ResponseBody) == "string" then
+					local DecodeSuccess: boolean, DecodedBody: any = pcall(function()
+						return HttpService:JSONDecode(ResponseBody)
+					end)
+					if DecodeSuccess then
+						return true, DecodedBody, nil
+					else
+						return true, ResponseBody, nil
+					end
 				else
-					return true, Response.Body, nil
+					return true, ResponseBody, nil
 				end
 			else
-				local ErrorMsg = if Response then `HTTP {Response.StatusCode}: {Response.Body}` else "Unknown error"
+				local StatusCode = (Response and Response.StatusCode) or "unknown"
+				local Body = (Response and Response.Body) or "no response body"
+				local ErrorMsg = `HTTP {StatusCode}: {Body}`
 				if Attempt >= Attempts then
 					return false, nil, ErrorMsg
 				end
@@ -381,24 +389,8 @@ function MatchmakingClient.SubmitMatchmakingTicket(
 		}
 	end
 
-	-- Atomic rate limiting (prevent race condition)
-	if Self._RateLimitLocked then
-		return {
-			Success = false,
-			ErrorMessage = "Rate limited. Please wait before submitting another ticket.",
-		}
-	end
-
-	-- Lock immediately before any async operation
-	Self._RateLimitLocked = true
-
-	-- Schedule unlock after cooldown
-	local UnlockThread = task.delay(MinSubmitIntervalSeconds, function()
-		if not Self._IsDestroyed then
-			Self._RateLimitLocked = false
-		end
-	end)
-	table.insert(Self._ActiveTaskThreads, UnlockThread)
+	-- Clean up completed threads periodically
+	Self:_CleanupCompletedThreads()
 
 	-- Validate party
 	if not TargetParty then
@@ -421,6 +413,21 @@ function MatchmakingClient.SubmitMatchmakingTicket(
 			ErrorMessage = "Party must have at least one member",
 		}
 	end
+
+	-- Per-player rate limiting (check leader's rate limit)
+	local LeaderId = TargetParty.LeaderId
+	local CurrentTime = tick()
+	local LastSubmitTime = Self._PlayerRateLimits[LeaderId] or 0
+
+	if CurrentTime - LastSubmitTime < MinSubmitIntervalSeconds then
+		return {
+			Success = false,
+			ErrorMessage = "Rate limited. Please wait before submitting another ticket.",
+		}
+	end
+
+	-- Update rate limit timestamp for this player
+	Self._PlayerRateLimits[LeaderId] = CurrentTime
 
 	for Index, Member in TargetParty.Members do
 		local Valid, Error = ValidatePartyMember(Member)
@@ -689,33 +696,46 @@ end
 function MatchmakingClient._TeleportMatchedPlayers(
 	Self: MatchmakingClientInstance,
 	TargetMatch: Match
-): ()
-	local PlayersToTeleport: { Player } = {}
+): boolean
+	local MaxRetries = 3
 
-	for _, PlayerId: PlayerId in TargetMatch.PlayerIds do
-		local FoundPlayer: Player? = Players:GetPlayerByUserId(PlayerId)
-		if FoundPlayer then
-			table.insert(PlayersToTeleport, FoundPlayer)
+	for Attempt = 1, MaxRetries do
+		-- Validate players are still in game before each attempt
+		local PlayersToTeleport: { Player } = {}
+
+		for _, PlayerId: PlayerId in TargetMatch.PlayerIds do
+			local FoundPlayer: Player? = Players:GetPlayerByUserId(PlayerId)
+			if FoundPlayer and FoundPlayer.Parent then -- Check player is still in game
+				table.insert(PlayersToTeleport, FoundPlayer)
+			end
+		end
+
+		if #PlayersToTeleport == 0 then
+			Log(Self, "error", `All players left before teleport for match {TargetMatch.MatchId}`)
+			return false
+		end
+
+		local TeleportOptions: TeleportOptions = Instance.new("TeleportOptions")
+		TeleportOptions.ShouldReserveServer = true
+
+		local Success: boolean, ErrorResult: any = pcall(function()
+			TeleportService:TeleportAsync(Self.Configuration.PlaceId, PlayersToTeleport, TeleportOptions)
+		end)
+
+		if Success then
+			Log(Self, "info", `Teleported {#PlayersToTeleport} players for match {TargetMatch.MatchId}`)
+			return true
+		end
+
+		Log(Self, "warn", `Teleport attempt {Attempt}/{MaxRetries} failed for match {TargetMatch.MatchId}: {tostring(ErrorResult)}`)
+
+		if Attempt < MaxRetries then
+			task.wait(1) -- Wait before retry
 		end
 	end
 
-	if #PlayersToTeleport == 0 then
-		Log(Self, "warn", `No players found to teleport for match {TargetMatch.MatchId}`)
-		return
-	end
-
-	local TeleportOptions: TeleportOptions = Instance.new("TeleportOptions")
-	TeleportOptions.ShouldReserveServer = true
-
-	local Success: boolean, ErrorResult: any = pcall(function()
-		TeleportService:TeleportAsync(Self.Configuration.PlaceId, PlayersToTeleport, TeleportOptions)
-	end)
-
-	if Success then
-		Log(Self, "info", `Teleported {#PlayersToTeleport} players for match {TargetMatch.MatchId}`)
-	else
-		Log(Self, "error", `Teleport failed for match {TargetMatch.MatchId}: {tostring(ErrorResult)}`)
-	end
+	Log(Self, "error", `Teleport failed after {MaxRetries} attempts for match {TargetMatch.MatchId}`)
+	return false
 end
 
 function MatchmakingClient._Subscribe(Self: MatchmakingClientInstance): boolean
@@ -929,6 +949,71 @@ function MatchmakingClient.GetActiveTicketCount(Self: MatchmakingClientInstance)
 	return Count
 end
 
+function MatchmakingClient._CleanupCompletedThreads(Self: MatchmakingClientInstance)
+	local ActiveThreads: { thread } = {}
+	for _, Thread in Self._ActiveTaskThreads do
+		local Status = coroutine.status(Thread)
+		if Status ~= "dead" then
+			table.insert(ActiveThreads, Thread)
+		end
+	end
+	Self._ActiveTaskThreads = ActiveThreads
+end
+
+function MatchmakingClient.WaitForMatch(
+	Self: MatchmakingClientInstance,
+	PlayerId: PlayerId,
+	Timeout: number?
+): Match?
+	if Self._IsDestroyed then
+		return nil
+	end
+
+	local TimeoutSeconds = Timeout or 300 -- Default 5 minutes
+	local MatchResult: Match? = nil
+	local OriginalCallback = Self.OnMatchCreated
+	local Signal = Instance.new("BindableEvent")
+
+	-- Temporarily override callback to capture match for this player
+	Self.OnMatchCreated = function(ReceivedMatch: Match)
+		-- Check if this match includes our player
+		for _, MatchPlayerId in ReceivedMatch.PlayerIds do
+			if MatchPlayerId == PlayerId then
+				MatchResult = ReceivedMatch
+				Signal:Fire()
+				break
+			end
+		end
+
+		-- Also call original callback if it exists
+		if OriginalCallback then
+			local CallbackSuccess, CallbackError = pcall(OriginalCallback, ReceivedMatch)
+			if not CallbackSuccess then
+				Log(Self, "error", `Original OnMatchCreated callback failed: {CallbackError}`)
+			end
+		end
+	end
+
+	-- Track this pending wait
+	local TimeoutThread = task.delay(TimeoutSeconds, function()
+		Signal:Fire()
+	end)
+	Self._PendingMatches[PlayerId] = TimeoutThread
+
+	-- Wait for match or timeout
+	Signal.Event:Wait()
+
+	-- Cleanup
+	if coroutine.status(TimeoutThread) == "suspended" then
+		task.cancel(TimeoutThread)
+	end
+	Self._PendingMatches[PlayerId] = nil
+	Signal:Destroy()
+	Self.OnMatchCreated = OriginalCallback
+
+	return MatchResult
+end
+
 function MatchmakingClient.GetPlayerTicket(Self: MatchmakingClientInstance, PlayerId: PlayerId): TicketId?
 	return Self.ActiveTickets[PlayerId]
 end
@@ -953,13 +1038,20 @@ function MatchmakingClient.Destroy(Self: MatchmakingClientInstance)
 	end
 	table.clear(Self._ActiveTaskThreads)
 
-	-- Reset rate limit lock
-	Self._RateLimitLocked = false
+	-- Cancel pending match waits
+	for _, Thread in Self._PendingMatches do
+		local Status = coroutine.status(Thread)
+		if Status == "suspended" then
+			task.cancel(Thread)
+		end
+	end
+	table.clear(Self._PendingMatches)
 
 	-- Clear all tracking
 	table.clear(Self.ActiveTickets)
 	table.clear(Self.ActiveParties)
 	table.clear(Self.TicketToPlayers)
+	table.clear(Self._PlayerRateLimits)
 
 	Log(Self, "info", "MatchmakingClient destroyed")
 end
