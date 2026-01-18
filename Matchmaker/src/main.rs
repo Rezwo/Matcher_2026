@@ -5,7 +5,7 @@ mod Configurations;
 mod Matchmaker;
 
 use axum::{
-    extract::{Path, State as AxumState, Request},
+    extract::{Path, State as AxumState, Request, DefaultBodyLimit},
     routing::{get, post, delete},
     Json as AxumJson, Router,
     http::{StatusCode, HeaderMap},
@@ -110,6 +110,21 @@ async fn AuthMiddleware(
     Ok(Next.run(Req).await)
 }
 
+async fn RateLimitMiddleware(
+    AxumState(Data): AxumState<Arc<AppState>>,
+    Req: Request,
+    Next: Next,
+) -> Result<Response, (StatusCode, AxumJson<ErrorResponse>)> {
+    // Apply global rate limit to all protected endpoints
+    if Data.SubmitLimiter.check().is_err() {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            AxumJson(ErrorResponse { Error: "Rate limit exceeded. Try again later.".to_string() }),
+        ));
+    }
+    Ok(Next.run(Req).await)
+}
+
 async fn ShutdownSignal(State: Arc<AppState>) {
     match tokio::signal::ctrl_c().await {
         Ok(_) => {
@@ -143,8 +158,8 @@ async fn main() {
     };
 
     let RedisPool: Pool<RedisConnectionManager> = match Pool::builder()
-        .max_size(16)
-        .min_idle(Some(4))
+        .max_size(Config.RedisPoolMaxSize)
+        .min_idle(Some(Config.RedisPoolMinIdle))
         .build(Manager)
         .await
     {
@@ -166,7 +181,7 @@ async fn main() {
 
     let HttpClient: reqwest::Client = match reqwest::Client::builder()
         .pool_max_idle_per_host(10)
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(Config.HttpTimeoutSeconds))
         .build()
     {
         Ok(Client) => Client,
@@ -176,8 +191,12 @@ async fn main() {
         }
     };
 
-    let SubmitLimiter = RateLimiter::direct(Quota::per_second(NonZeroU32::new(1000).unwrap()));
-    let RegionalLimiter = RateLimiter::dashmap(Quota::per_second(NonZeroU32::new(500).unwrap()));
+    let SubmitLimiter = RateLimiter::direct(Quota::per_second(
+        NonZeroU32::new(Config.SubmitRateLimitPerSecond).expect("SUBMIT_RATE_LIMIT must be > 0")
+    ));
+    let RegionalLimiter = RateLimiter::dashmap(Quota::per_second(
+        NonZeroU32::new(Config.RegionalRateLimitPerSecond).expect("REGIONAL_RATE_LIMIT must be > 0")
+    ));
 
     let SharedState: Arc<AppState> = Arc::new(AppState {
         RedisPool,
@@ -240,7 +259,7 @@ async fn main() {
                         }
                     }
                     Err(Error) => {
-                        error!("Redis HSCAN failed: {}. Skipping this tick.", Error);
+                        error!("Redis HSCAN failed at cursor {}: {}. Skipping this tick.", Cursor, Error);
                         ScanFailed = true;
                         break;
                     }
@@ -278,7 +297,7 @@ async fn main() {
                 .filter(|T| T.Status == TicketStatus::Queued)
                 .collect();
 
-            LoopState.CurrentQueueSize.store(Tickets.len() as u64, Ordering::Relaxed);
+            LoopState.CurrentQueueSize.store(Tickets.len() as u64, Ordering::Release);
 
             if Tickets.is_empty() {
                 LoopState.QueuePositions.clear();
@@ -288,7 +307,7 @@ async fn main() {
             let ExpiredTickets = LoopState.MatchmakerInstance.RemoveExpiredTickets(&mut Tickets);
             if !ExpiredTickets.is_empty() {
                 let ExpiredCount = ExpiredTickets.len();
-                LoopState.Metrics.TotalTicketsExpired.fetch_add(ExpiredCount as u64, Ordering::Relaxed);
+                LoopState.Metrics.TotalTicketsExpired.fetch_add(ExpiredCount as u64, Ordering::Release);
 
                 let ExpiredIds: Vec<String> = ExpiredTickets.iter().map(|T| T.TicketId.to_string()).collect();
                 match redis::cmd("HDEL")
@@ -335,8 +354,8 @@ async fn main() {
 
                 for Ticket in FoundMatch {
                     let WaitTime = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp) as u64;
-                    LoopState.Metrics.TotalWaitTimeSeconds.fetch_add(WaitTime, Ordering::Relaxed);
-                    LoopState.Metrics.MatchedTicketCount.fetch_add(1, Ordering::Relaxed);
+                    LoopState.Metrics.TotalWaitTimeSeconds.fetch_add(WaitTime, Ordering::Release);
+                    LoopState.Metrics.MatchedTicketCount.fetch_add(1, Ordering::Release);
                 }
 
                 // Mark tickets as matched with error handling
@@ -345,12 +364,17 @@ async fn main() {
                     for Ticket in FoundMatch {
                         let mut MarkedTicket = Ticket.clone();
                         MarkedTicket.Status = TicketStatus::Matched;
-                        if let Ok(SerializedTicket) = serde_json::to_string(&MarkedTicket) {
-                            Pipeline.cmd("HSET")
-                                .arg(REDIS_TICKET_KEY)
-                                .arg(Ticket.TicketId.to_string())
-                                .arg(SerializedTicket)
-                                .ignore();
+                        match serde_json::to_string(&MarkedTicket) {
+                            Ok(SerializedTicket) => {
+                                Pipeline.cmd("HSET")
+                                    .arg(REDIS_TICKET_KEY)
+                                    .arg(Ticket.TicketId.to_string())
+                                    .arg(SerializedTicket)
+                                    .ignore();
+                            }
+                            Err(Error) => {
+                                warn!("Failed to serialize matched ticket {}: {}", Ticket.TicketId, Error);
+                            }
                         }
                     }
                     if let Err(Error) = Pipeline.query_async::<()>(&mut *Connection).await {
@@ -369,7 +393,7 @@ async fn main() {
                 tokio::spawn(async move {
                     match SendMatchToRobloxWithRetry(MatchIdClone, MatchMembers, InternalState.clone()).await {
                         Ok(_) => {
-                            InternalState.Metrics.TotalMatchesCreated.fetch_add(1, Ordering::Relaxed);
+                            InternalState.Metrics.TotalMatchesCreated.fetch_add(1, Ordering::Release);
 
                             match InternalState.RedisPool.get().await {
                                 Ok(mut Con) => {
@@ -419,12 +443,17 @@ async fn main() {
             if !UnmatchedTickets.is_empty() {
                 let mut Pipeline = redis::pipe();
                 for Ticket in UnmatchedTickets {
-                    if let Ok(SerializedTicket) = serde_json::to_string(&Ticket) {
-                        Pipeline.cmd("HSET")
-                            .arg(REDIS_TICKET_KEY)
-                            .arg(Ticket.TicketId.to_string())
-                            .arg(SerializedTicket)
-                            .ignore();
+                    match serde_json::to_string(&Ticket) {
+                        Ok(SerializedTicket) => {
+                            Pipeline.cmd("HSET")
+                                .arg(REDIS_TICKET_KEY)
+                                .arg(Ticket.TicketId.to_string())
+                                .arg(SerializedTicket)
+                                .ignore();
+                        }
+                        Err(Error) => {
+                            warn!("Failed to serialize unmatched ticket {}: {}", Ticket.TicketId, Error);
+                        }
                     }
                 }
                 if let Err(Error) = Pipeline.query_async::<()>(&mut *Connection).await {
@@ -438,7 +467,9 @@ async fn main() {
         .route("/submit", post(SubmitTicket))
         .route("/ticket/{TicketId}", get(GetTicketStatus))
         .route("/ticket/{TicketId}", delete(CancelTicket))
-        .layer(middleware::from_fn_with_state(SharedState.clone(), AuthMiddleware));
+        .layer(middleware::from_fn_with_state(SharedState.clone(), AuthMiddleware))
+        .layer(middleware::from_fn_with_state(SharedState.clone(), RateLimitMiddleware))
+        .layer(DefaultBodyLimit::max(65536)); // 64KB body limit
 
     let App: Router = Router::new()
         .route("/health", get(HealthCheck))
@@ -483,10 +514,10 @@ async fn GetMetricsSnapshot(
     AxumState(Data): AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
     let Snapshot = MetricsSnapshot {
-        QueueSize: Data.CurrentQueueSize.load(Ordering::Relaxed),
-        TotalTicketsProcessed: Data.Metrics.TotalTicketsProcessed.load(Ordering::Relaxed),
-        TotalMatchesCreated: Data.Metrics.TotalMatchesCreated.load(Ordering::Relaxed),
-        TotalTicketsExpired: Data.Metrics.TotalTicketsExpired.load(Ordering::Relaxed),
+        QueueSize: Data.CurrentQueueSize.load(Ordering::Acquire),
+        TotalTicketsProcessed: Data.Metrics.TotalTicketsProcessed.load(Ordering::Acquire),
+        TotalMatchesCreated: Data.Metrics.TotalMatchesCreated.load(Ordering::Acquire),
+        TotalTicketsExpired: Data.Metrics.TotalTicketsExpired.load(Ordering::Acquire),
         AverageWaitTimeSeconds: Data.Metrics.GetAverageWaitTime(),
         MatchesLastMinute: 0,
         ModeMetrics: HashMap::new(),
@@ -530,7 +561,14 @@ async fn GetTicketStatus(
     };
 
     let CurrentTimestamp = Utc::now().timestamp();
-    let WaitTimeSeconds = CurrentTimestamp.saturating_sub(Ticket.SubmittedTimestamp);
+    let WaitTimeSeconds = if Ticket.SubmittedTimestamp > CurrentTimestamp {
+        // Clock skew detected - ticket appears to be from the future
+        warn!("Clock skew detected for ticket {}: submitted {} > current {}",
+            TicketId, Ticket.SubmittedTimestamp, CurrentTimestamp);
+        0
+    } else {
+        CurrentTimestamp - Ticket.SubmittedTimestamp
+    };
 
     let QueuePosition = Data.QueuePositions.get(&TicketId).map(|V| *V);
 
@@ -642,12 +680,28 @@ async fn SubmitTicket(
         ));
     }
 
-    // Validate Priority is reasonable
+    // Validate Priority is reasonable (including negative values)
     if Request.Priority > 10000 {
         return Err((
             StatusCode::BAD_REQUEST,
             AxumJson(ErrorResponse { Error: "Priority cannot exceed 10000".to_string() }),
         ));
+    }
+
+    // Validate CustomData size (8KB limit)
+    if let Some(ref CustomData) = Request.CustomData {
+        match serde_json::to_string(CustomData) {
+            Ok(Serialized) if Serialized.len() > 8192 => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    AxumJson(ErrorResponse { Error: "CustomData exceeds 8KB limit".to_string() }),
+                ));
+            }
+            Err(Error) => {
+                warn!("Failed to validate CustomData size: {}", Error);
+            }
+            _ => {}
+        }
     }
 
     let PreferredRegion: String = Request.PreferredRegion
@@ -700,7 +754,7 @@ async fn SubmitTicket(
             AxumJson(ErrorResponse { Error: "Failed to store ticket in Redis".to_string() }),
         ))?;
 
-    Data.Metrics.TotalTicketsProcessed.fetch_add(1, Ordering::Relaxed);
+    Data.Metrics.TotalTicketsProcessed.fetch_add(1, Ordering::Release);
 
     info!("+ Party Ticket Queued: {} (Size: {}, Region: {}, Mode: {}, Priority: {})",
         TicketId, NewTicket.Members.len(), PreferredRegion, NewTicket.GameMode.Name, NewTicket.Priority);

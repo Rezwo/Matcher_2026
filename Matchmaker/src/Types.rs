@@ -124,6 +124,11 @@ pub struct MatchmakingConfiguration {
     pub TicketTtlSeconds: i64,
     pub RatingBucketSize: f64,
     pub DebugMode: bool,
+    pub HttpTimeoutSeconds: u64,
+    pub RedisPoolMaxSize: u32,
+    pub RedisPoolMinIdle: u32,
+    pub SubmitRateLimitPerSecond: u32,
+    pub RegionalRateLimitPerSecond: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -186,8 +191,8 @@ impl MatchmakerMetrics {
     }
 
     pub fn GetAverageWaitTime(&self) -> f64 {
-        let TotalWait = self.TotalWaitTimeSeconds.load(std::sync::atomic::Ordering::Relaxed);
-        let MatchedCount = self.MatchedTicketCount.load(std::sync::atomic::Ordering::Relaxed);
+        let TotalWait = self.TotalWaitTimeSeconds.load(std::sync::atomic::Ordering::Acquire);
+        let MatchedCount = self.MatchedTicketCount.load(std::sync::atomic::Ordering::Acquire);
         if MatchedCount == 0 {
             0.0
         } else {

@@ -37,6 +37,10 @@ type MatchmakingClientInstance = {
 	_PlayerRemovingConnection: RBXScriptConnection?,
 	_RetryCount: number,
 	_LastSubmitTime: number,
+	_RateLimitLocked: boolean,
+	_PendingResubscribeThread: thread?,
+	_ActiveTaskThreads: { thread },
+	_IsDestroyed: boolean,
 }
 
 -- Constants
@@ -156,7 +160,7 @@ function MatchmakingClient.New(Configuration: ClientConfiguration): MatchmakingC
 			Topic = Configuration.Topic,
 			PlaceId = Configuration.PlaceId,
 			AutoTeleport = if Configuration.AutoTeleport ~= nil then Configuration.AutoTeleport else true,
-			RetryAttempts = Configuration.RetryAttempts or DefaultRetryAttempts,
+			RetryAttempts = math.min(Configuration.RetryAttempts or DefaultRetryAttempts, MaxRetryAttempts),
 			RetryDelaySeconds = Configuration.RetryDelaySeconds or DefaultRetryDelaySeconds,
 			RequestTimeoutSeconds = Configuration.RequestTimeoutSeconds or DefaultRequestTimeoutSeconds,
 			DebugMode = Configuration.DebugMode or false,
@@ -171,6 +175,10 @@ function MatchmakingClient.New(Configuration: ClientConfiguration): MatchmakingC
 		_PlayerRemovingConnection = nil,
 		_RetryCount = 0,
 		_LastSubmitTime = 0,
+		_RateLimitLocked = false,
+		_PendingResubscribeThread = nil,
+		_ActiveTaskThreads = {},
+		_IsDestroyed = false,
 	}, MatchmakingClient) :: any
 
 	-- Auto-setup player tracking
@@ -317,7 +325,13 @@ function MatchmakingClient._MakeRequest(
 			}
 
 			if Body then
-				RequestOptions.Body = HttpService:JSONEncode(Body)
+				local EncodeSuccess, EncodedBody = pcall(function()
+					return HttpService:JSONEncode(Body)
+				end)
+				if not EncodeSuccess then
+					error(`Failed to encode request body: {EncodedBody}`)
+				end
+				RequestOptions.Body = EncodedBody
 			end
 
 			return HttpService:RequestAsync(RequestOptions)
@@ -359,18 +373,49 @@ function MatchmakingClient.SubmitMatchmakingTicket(
 	TargetParty: Party,
 	Options: SubmitOptions?
 ): MatchmakingResult
-	-- Rate limiting
-	local CurrentTime = tick()
-	if CurrentTime - Self._LastSubmitTime < MinSubmitIntervalSeconds then
+	-- Check if destroyed
+	if Self._IsDestroyed then
+		return {
+			Success = false,
+			ErrorMessage = "MatchmakingClient has been destroyed",
+		}
+	end
+
+	-- Atomic rate limiting (prevent race condition)
+	if Self._RateLimitLocked then
 		return {
 			Success = false,
 			ErrorMessage = "Rate limited. Please wait before submitting another ticket.",
 		}
 	end
-	Self._LastSubmitTime = CurrentTime
+
+	-- Lock immediately before any async operation
+	Self._RateLimitLocked = true
+
+	-- Schedule unlock after cooldown
+	local UnlockThread = task.delay(MinSubmitIntervalSeconds, function()
+		if not Self._IsDestroyed then
+			Self._RateLimitLocked = false
+		end
+	end)
+	table.insert(Self._ActiveTaskThreads, UnlockThread)
 
 	-- Validate party
-	if not TargetParty or not TargetParty.Members or #TargetParty.Members == 0 then
+	if not TargetParty then
+		return {
+			Success = false,
+			ErrorMessage = "Party is required",
+		}
+	end
+
+	if type(TargetParty.Members) ~= "table" then
+		return {
+			Success = false,
+			ErrorMessage = "Party.Members must be a table",
+		}
+	end
+
+	if #TargetParty.Members == 0 then
 		return {
 			Success = false,
 			ErrorMessage = "Party must have at least one member",
@@ -399,11 +444,20 @@ function MatchmakingClient.SubmitMatchmakingTicket(
 			end
 		end
 
-		if Options.Priority and (type(Options.Priority) ~= "number" or Options.Priority < 0 or Options.Priority > 10000) then
-			return {
-				Success = false,
-				ErrorMessage = "Priority must be a number between 0 and 10000",
-			}
+		if Options.Priority then
+			if type(Options.Priority) ~= "number" or Options.Priority < 0 or Options.Priority > 10000 then
+				return {
+					Success = false,
+					ErrorMessage = "Priority must be a number between 0 and 10000",
+				}
+			end
+			-- Ensure Priority is an integer
+			if Options.Priority ~= math.floor(Options.Priority) then
+				return {
+					Success = false,
+					ErrorMessage = "Priority must be an integer",
+				}
+			end
 		end
 	end
 
@@ -554,12 +608,23 @@ function MatchmakingClient._HandleMatchFound(
 	Self: MatchmakingClientInstance,
 	MessageData: { [string]: any }
 ): ()
+	-- Validate MessageData first
+	if not MessageData or type(MessageData) ~= "table" then
+		Log(Self, "error", "Invalid message data: nil or not a table")
+		return
+	end
+
+	if not MessageData.Data or type(MessageData.Data) ~= "string" then
+		Log(Self, "error", "Invalid message data: missing or invalid Data field")
+		return
+	end
+
 	local DecodeSuccess: boolean, MatchData: any = pcall(function()
 		return HttpService:JSONDecode(MessageData.Data)
 	end)
 
 	if not DecodeSuccess then
-		Log(Self, "error", "Failed to decode match data")
+		Log(Self, "error", `Failed to decode match data: {tostring(MatchData)}`)
 		return
 	end
 
@@ -604,14 +669,15 @@ function MatchmakingClient._HandleMatchFound(
 
 	Log(Self, "info", `Match found: {ReceivedMatch.MatchId} ({#ReceivedMatch.PlayerIds} players)`)
 
-	-- Call user callback safely
-	if Self.OnMatchCreated then
-		task.spawn(function()
+	-- Call user callback safely with tracking
+	if Self.OnMatchCreated and not Self._IsDestroyed then
+		local CallbackThread = task.spawn(function()
 			local CallbackSuccess, CallbackError = pcall(Self.OnMatchCreated, ReceivedMatch)
 			if not CallbackSuccess then
 				Log(Self, "error", `OnMatchCreated callback failed: {CallbackError}`)
 			end
 		end)
+		table.insert(Self._ActiveTaskThreads, CallbackThread)
 	end
 
 	-- Auto teleport if enabled
@@ -680,9 +746,19 @@ function MatchmakingClient._Subscribe(Self: MatchmakingClientInstance): boolean
 end
 
 function MatchmakingClient._ScheduleResubscribe(Self: MatchmakingClientInstance)
+	if Self._IsDestroyed then
+		return
+	end
+
 	if Self._RetryCount >= MaxRetryAttempts then
 		Log(Self, "error", `Max subscription retry attempts ({MaxRetryAttempts}) reached`)
 		return
+	end
+
+	-- Cancel any existing pending resubscribe
+	if Self._PendingResubscribeThread then
+		task.cancel(Self._PendingResubscribeThread)
+		Self._PendingResubscribeThread = nil
 	end
 
 	Self._RetryCount += 1
@@ -690,8 +766,10 @@ function MatchmakingClient._ScheduleResubscribe(Self: MatchmakingClientInstance)
 
 	Log(Self, "warn", `Scheduling resubscribe attempt {Self._RetryCount} in {Delay} seconds`)
 
-	task.delay(Delay, function()
-		if not Self.IsListening and not Self._SubscriptionConnection then
+	Self._PendingResubscribeThread = task.delay(Delay, function()
+		Self._PendingResubscribeThread = nil
+		-- Double-check state before resubscribing (prevent race condition)
+		if not Self._IsDestroyed and not Self.IsListening and not Self._SubscriptionConnection then
 			Self:_Subscribe()
 		end
 	end)
@@ -707,6 +785,12 @@ function MatchmakingClient.StartListening(Self: MatchmakingClientInstance): bool
 end
 
 function MatchmakingClient.StopListening(Self: MatchmakingClientInstance)
+	-- Cancel pending resubscribe first
+	if Self._PendingResubscribeThread then
+		task.cancel(Self._PendingResubscribeThread)
+		Self._PendingResubscribeThread = nil
+	end
+
 	if Self._SubscriptionConnection then
 		Self._SubscriptionConnection:Disconnect()
 		Self._SubscriptionConnection = nil
@@ -720,11 +804,22 @@ function MatchmakingClient._SetupPlayerTracking(Self: MatchmakingClientInstance)
 	-- Clean up existing connection if any
 	if Self._PlayerRemovingConnection then
 		Self._PlayerRemovingConnection:Disconnect()
+		Self._PlayerRemovingConnection = nil
 	end
 
-	Self._PlayerRemovingConnection = Players.PlayerRemoving:Connect(function(Player: Player)
-		Self:OnPlayerLeft(Player.UserId)
+	local Success, ConnectionOrError = pcall(function()
+		return Players.PlayerRemoving:Connect(function(Player: Player)
+			if not Self._IsDestroyed and Player and Player.UserId then
+				Self:OnPlayerLeft(Player.UserId)
+			end
+		end)
 	end)
+
+	if Success then
+		Self._PlayerRemovingConnection = ConnectionOrError
+	else
+		Log(Self, "error", `Failed to setup player tracking: {tostring(ConnectionOrError)}`)
+	end
 end
 
 function MatchmakingClient.OnPlayerLeft(Self: MatchmakingClientInstance, PlayerId: PlayerId): boolean
@@ -744,24 +839,41 @@ function MatchmakingClient.OnPlayerLeft(Self: MatchmakingClientInstance, PlayerI
 	if PartyInfo.LeaderId == PlayerId then
 		Log(Self, "info", `Party leader {PlayerId} left, cancelling ticket {TicketId}`)
 
-		-- Cancel on server (fire and forget)
-		task.spawn(function()
-			Self:CancelMatchmakingTicket(TicketId)
-		end)
-
-		-- Clean up all members locally
+		-- Clean up all members locally first (before async operation)
 		for _, MemberId in PartyInfo.MemberIds do
 			Self.ActiveTickets[MemberId] = nil
 		end
 		Self.ActiveParties[TicketId] = nil
 		Self.TicketToPlayers[TicketId] = nil
 
+		-- Cancel on server with tracking (if not destroyed)
+		if not Self._IsDestroyed then
+			local CancelThread = task.spawn(function()
+				Self:CancelMatchmakingTicket(TicketId)
+			end)
+			table.insert(Self._ActiveTaskThreads, CancelThread)
+		end
+
 		return true
 	end
 
-	-- Non-leader left - just remove from local tracking
+	-- Non-leader left - remove from local tracking
+	-- Note: Server still has this player in the ticket. For accurate matchmaking,
+	-- the party should update the ticket on server or cancel and resubmit.
 	Self.ActiveTickets[PlayerId] = nil
-	Log(Self, "debug", `Party member {PlayerId} left (ticket {TicketId} still active)`)
+
+	-- Also remove from TicketToPlayers if present
+	local PlayerIds = Self.TicketToPlayers[TicketId]
+	if PlayerIds then
+		for Index, Id in PlayerIds do
+			if Id == PlayerId then
+				table.remove(PlayerIds, Index)
+				break
+			end
+		end
+	end
+
+	Log(Self, "warn", `Party member {PlayerId} left (ticket {TicketId} still active on server - consider resubmitting)`)
 	return false
 end
 
@@ -792,6 +904,20 @@ function MatchmakingClient.DequeuePlayer(
 	Self: MatchmakingClientInstance,
 	TargetPlayer: Player
 ): CancelResult
+	if not TargetPlayer then
+		return {
+			Success = false,
+			ErrorMessage = "TargetPlayer is required",
+		}
+	end
+
+	if not TargetPlayer.UserId or TargetPlayer.UserId <= 0 then
+		return {
+			Success = false,
+			ErrorMessage = "Invalid TargetPlayer: missing or invalid UserId",
+		}
+	end
+
 	return Self:CancelPlayerTicket(TargetPlayer.UserId)
 end
 
@@ -808,12 +934,27 @@ function MatchmakingClient.GetPlayerTicket(Self: MatchmakingClientInstance, Play
 end
 
 function MatchmakingClient.Destroy(Self: MatchmakingClientInstance)
+	-- Mark as destroyed first (prevents new operations)
+	Self._IsDestroyed = true
+
 	Self:StopListening()
 
 	if Self._PlayerRemovingConnection then
 		Self._PlayerRemovingConnection:Disconnect()
 		Self._PlayerRemovingConnection = nil
 	end
+
+	-- Cancel all tracked task threads
+	for _, TaskThread in Self._ActiveTaskThreads do
+		local Status = coroutine.status(TaskThread)
+		if Status == "suspended" then
+			task.cancel(TaskThread)
+		end
+	end
+	table.clear(Self._ActiveTaskThreads)
+
+	-- Reset rate limit lock
+	Self._RateLimitLocked = false
 
 	-- Clear all tracking
 	table.clear(Self.ActiveTickets)
