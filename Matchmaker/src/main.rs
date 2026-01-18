@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![allow(non_snake_case)]
 
 mod Types;
@@ -20,7 +19,6 @@ use dashmap::DashMap;
 use governor::{Quota, RateLimiter};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed, keyed::DashMapStateStore};
-use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -29,7 +27,7 @@ use tokio::time::{interval, Duration, sleep};
 use tokio::sync::Notify;
 use uuid::Uuid;
 use serde_json::json;
-use tracing::{info, warn, error};
+use tracing::{info, warn, error, debug};
 use subtle::ConstantTimeEq;
 
 use crate::Types::{
@@ -41,7 +39,6 @@ use crate::Configurations::GetStandardConfiguration;
 use crate::Matchmaker::Matchmaker as MatchmakingLogic;
 
 const REDIS_TICKET_KEY: &str = "MATCHMAKING_QUEUES";
-const REDIS_QUEUE_ZSET: &str = "MATCHMAKING_QUEUE_ORDER";
 
 type SubmitRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 type RegionalRateLimiter = RateLimiter<String, DashMapStateStore<String>, DefaultClock>;
@@ -58,6 +55,7 @@ struct AppState {
     pub SubmitLimiter: SubmitRateLimiter,
     pub RegionalLimiter: RegionalRateLimiter,
     pub RegionalQueueSizes: DashMap<String, u64>,
+    pub DebugMode: bool,
 }
 
 fn ConstantTimeCompare(A: &str, B: &str) -> bool {
@@ -76,29 +74,54 @@ async fn AuthMiddleware(
     Headers: HeaderMap,
     Req: Request,
     Next: Next,
-) -> Result<Response, StatusCode> {
-    let AuthHeader: &str = Headers
-        .get("X-Api-Key")
-        .and_then(|Value| Value.to_str().ok())
-        .unwrap_or("");
+) -> Result<Response, (StatusCode, AxumJson<ErrorResponse>)> {
+    let AuthHeader = Headers.get("X-Api-Key");
 
-    if !ConstantTimeCompare(AuthHeader, &Data.MatchmakerInstance.Configuration.ServerAuthSecret) {
-        warn!("Unauthorized access attempt detected.");
-        return Err(StatusCode::UNAUTHORIZED);
+    // Check if header exists
+    if AuthHeader.is_none() {
+        warn!("Unauthorized: Missing X-Api-Key header");
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            AxumJson(ErrorResponse { Error: "Missing X-Api-Key header".to_string() }),
+        ));
+    }
+
+    // Check if header is valid UTF-8
+    let AuthValue = AuthHeader
+        .unwrap()
+        .to_str()
+        .map_err(|_| {
+            warn!("Unauthorized: Invalid X-Api-Key header encoding");
+            (
+                StatusCode::UNAUTHORIZED,
+                AxumJson(ErrorResponse { Error: "Invalid X-Api-Key header encoding".to_string() }),
+            )
+        })?;
+
+    // Constant-time comparison
+    if !ConstantTimeCompare(AuthValue, &Data.MatchmakerInstance.Configuration.ServerAuthSecret) {
+        warn!("Unauthorized: Invalid API key");
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            AxumJson(ErrorResponse { Error: "Invalid API key".to_string() }),
+        ));
     }
 
     Ok(Next.run(Req).await)
 }
 
 async fn ShutdownSignal(State: Arc<AppState>) {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C signal handler");
-
-    info!("Shutdown signal received. Draining queue...");
-    State.ShuttingDown.store(true, Ordering::SeqCst);
-    State.ShutdownNotify.notified().await;
-    info!("Queue drained. Closing gracefully...");
+    match tokio::signal::ctrl_c().await {
+        Ok(_) => {
+            info!("Shutdown signal received. Draining queue...");
+            State.ShuttingDown.store(true, Ordering::SeqCst);
+            State.ShutdownNotify.notified().await;
+            info!("Queue drained. Closing gracefully...");
+        }
+        Err(Error) => {
+            error!("Failed to listen for shutdown signal: {}", Error);
+        }
+    }
 }
 
 #[tokio::main]
@@ -108,17 +131,29 @@ async fn main() {
     info!("Metrics available at /metrics/snapshot");
 
     let Config: MatchmakingConfiguration = GetStandardConfiguration();
+    let DebugMode = Config.DebugMode;
     let RedisUrl: String = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-    let Manager: RedisConnectionManager = RedisConnectionManager::new(RedisUrl.clone())
-        .expect("Invalid Redis URL");
+    let Manager: RedisConnectionManager = match RedisConnectionManager::new(RedisUrl.clone()) {
+        Ok(M) => M,
+        Err(Error) => {
+            error!("Invalid Redis URL '{}': {}", RedisUrl, Error);
+            return;
+        }
+    };
 
-    let RedisPool: Pool<RedisConnectionManager> = Pool::builder()
+    let RedisPool: Pool<RedisConnectionManager> = match Pool::builder()
         .max_size(16)
         .min_idle(Some(4))
         .build(Manager)
         .await
-        .expect("Failed to create Redis connection pool");
+    {
+        Ok(Pool) => Pool,
+        Err(Error) => {
+            error!("Failed to create Redis connection pool: {}", Error);
+            return;
+        }
+    };
 
     match RedisPool.get().await {
         Ok(_) => info!("Successfully connected to Redis at {}", RedisUrl),
@@ -129,11 +164,17 @@ async fn main() {
         }
     }
 
-    let HttpClient: reqwest::Client = reqwest::Client::builder()
+    let HttpClient: reqwest::Client = match reqwest::Client::builder()
         .pool_max_idle_per_host(10)
         .timeout(Duration::from_secs(30))
         .build()
-        .expect("Failed to create HTTP client");
+    {
+        Ok(Client) => Client,
+        Err(Error) => {
+            error!("Failed to create HTTP client: {}", Error);
+            return;
+        }
+    };
 
     let SubmitLimiter = RateLimiter::direct(Quota::per_second(NonZeroU32::new(1000).unwrap()));
     let RegionalLimiter = RateLimiter::dashmap(Quota::per_second(NonZeroU32::new(500).unwrap()));
@@ -150,6 +191,7 @@ async fn main() {
         SubmitLimiter,
         RegionalLimiter,
         RegionalQueueSizes: DashMap::new(),
+        DebugMode,
     });
 
     let LoopState: Arc<AppState> = SharedState.clone();
@@ -173,32 +215,63 @@ async fn main() {
                 }
             };
 
+            // Scan tickets from Redis with proper error handling
             let mut RawTickets: Vec<String> = Vec::with_capacity(256);
             let mut Cursor: u64 = 0;
+            let mut ScanFailed = false;
+
             loop {
-                let ScanResult: (u64, Vec<(String, String)>) = redis::cmd("HSCAN")
+                let ScanResult: Result<(u64, Vec<(String, String)>), redis::RedisError> = redis::cmd("HSCAN")
                     .arg(REDIS_TICKET_KEY)
                     .arg(Cursor)
                     .arg("COUNT")
                     .arg(100)
                     .query_async(&mut *Connection)
-                    .await
-                    .unwrap_or((0, Vec::new()));
+                    .await;
 
-                Cursor = ScanResult.0;
-                for (_, Value) in ScanResult.1 {
-                    RawTickets.push(Value);
-                }
-
-                if Cursor == 0 {
-                    break;
+                match ScanResult {
+                    Ok((NewCursor, Entries)) => {
+                        Cursor = NewCursor;
+                        for (_, Value) in Entries {
+                            RawTickets.push(Value);
+                        }
+                        if Cursor == 0 {
+                            break;
+                        }
+                    }
+                    Err(Error) => {
+                        error!("Redis HSCAN failed: {}. Skipping this tick.", Error);
+                        ScanFailed = true;
+                        break;
+                    }
                 }
             }
 
+            if ScanFailed {
+                continue;
+            }
+
+            // Parse tickets with logging for failures
+            let mut ParseFailures = 0u32;
             let AllTickets: Vec<MatchmakingTicket> = RawTickets
-                .par_iter()
-                .filter_map(|Serialized| serde_json::from_str::<MatchmakingTicket>(Serialized).ok())
+                .iter()
+                .filter_map(|Serialized| {
+                    match serde_json::from_str::<MatchmakingTicket>(Serialized) {
+                        Ok(Ticket) => Some(Ticket),
+                        Err(Error) => {
+                            ParseFailures += 1;
+                            if LoopState.DebugMode {
+                                debug!("Failed to parse ticket: {}", Error);
+                            }
+                            None
+                        }
+                    }
+                })
                 .collect();
+
+            if ParseFailures > 0 {
+                warn!("Failed to parse {} tickets from Redis", ParseFailures);
+            }
 
             let mut Tickets: Vec<MatchmakingTicket> = AllTickets
                 .into_iter()
@@ -218,13 +291,15 @@ async fn main() {
                 LoopState.Metrics.TotalTicketsExpired.fetch_add(ExpiredCount as u64, Ordering::Relaxed);
 
                 let ExpiredIds: Vec<String> = ExpiredTickets.iter().map(|T| T.TicketId.to_string()).collect();
-                let _: Result<(), _> = redis::cmd("HDEL")
+                match redis::cmd("HDEL")
                     .arg(REDIS_TICKET_KEY)
-                    .arg(ExpiredIds)
-                    .query_async(&mut *Connection)
-                    .await;
-
-                info!("Expired {} stale tickets", ExpiredCount);
+                    .arg(&ExpiredIds)
+                    .query_async::<()>(&mut *Connection)
+                    .await
+                {
+                    Ok(_) => info!("Expired {} stale tickets", ExpiredCount),
+                    Err(Error) => warn!("Failed to delete expired tickets: {}", Error),
+                }
             }
 
             if Tickets.is_empty() {
@@ -240,9 +315,12 @@ async fn main() {
                     .then_with(|| A.SubmittedTimestamp.cmp(&B.SubmittedTimestamp))
             });
 
-            LoopState.QueuePositions.clear();
-            for (Index, Ticket) in Tickets.iter().enumerate() {
-                LoopState.QueuePositions.insert(Ticket.TicketId, Index + 1);
+            // Update queue positions atomically
+            {
+                LoopState.QueuePositions.clear();
+                for (Index, Ticket) in Tickets.iter().enumerate() {
+                    LoopState.QueuePositions.insert(Ticket.TicketId, Index + 1);
+                }
             }
 
             let Matches: Vec<Vec<MatchmakingTicket>> = LoopState.MatchmakerInstance.FindMatches(&Tickets);
@@ -261,6 +339,7 @@ async fn main() {
                     LoopState.Metrics.MatchedTicketCount.fetch_add(1, Ordering::Relaxed);
                 }
 
+                // Mark tickets as matched with error handling
                 {
                     let mut Pipeline = redis::pipe();
                     for Ticket in FoundMatch {
@@ -274,7 +353,9 @@ async fn main() {
                                 .ignore();
                         }
                     }
-                    let _: Result<(), _> = Pipeline.query_async(&mut *Connection).await;
+                    if let Err(Error) = Pipeline.query_async::<()>(&mut *Connection).await {
+                        error!("Failed to mark tickets as matched: {}", Error);
+                    }
                 }
 
                 for Ticket in FoundMatch {
@@ -282,33 +363,54 @@ async fn main() {
                 }
 
                 let InternalState: Arc<AppState> = LoopState.clone();
+                let MatchIdClone = MatchId;
+                let TicketIdsClone = MatchedTicketIds.clone();
+
                 tokio::spawn(async move {
-                    match SendMatchToRobloxWithRetry(MatchId, MatchMembers, InternalState.clone()).await {
+                    match SendMatchToRobloxWithRetry(MatchIdClone, MatchMembers, InternalState.clone()).await {
                         Ok(_) => {
                             InternalState.Metrics.TotalMatchesCreated.fetch_add(1, Ordering::Relaxed);
 
-                            if let Ok(mut Con) = InternalState.RedisPool.get().await {
-                                let _: Result<(), _> = redis::cmd("HDEL")
-                                    .arg(REDIS_TICKET_KEY)
-                                    .arg(MatchedTicketIds.clone())
-                                    .query_async(&mut *Con)
-                                    .await;
+                            match InternalState.RedisPool.get().await {
+                                Ok(mut Con) => {
+                                    if let Err(Error) = redis::cmd("HDEL")
+                                        .arg(REDIS_TICKET_KEY)
+                                        .arg(&TicketIdsClone)
+                                        .query_async::<()>(&mut *Con)
+                                        .await
+                                    {
+                                        error!("Failed to delete matched tickets {}: {}", MatchIdClone, Error);
+                                    }
+                                }
+                                Err(Error) => {
+                                    error!("Failed to get Redis connection for cleanup: {}", Error);
+                                }
                             }
                         }
                         Err(Error) => {
-                            error!("FATAL: Match notification failed for {}: {}", MatchId, Error);
-                            if let Ok(mut Con) = InternalState.RedisPool.get().await {
-                                let _: Result<(), _> = redis::cmd("HDEL")
-                                    .arg(REDIS_TICKET_KEY)
-                                    .arg(MatchedTicketIds)
-                                    .query_async(&mut *Con)
-                                    .await;
+                            error!("FATAL: Match notification failed for {}: {}", MatchIdClone, Error);
+                            // Still try to clean up the tickets to prevent them from being stuck
+                            match InternalState.RedisPool.get().await {
+                                Ok(mut Con) => {
+                                    if let Err(DelError) = redis::cmd("HDEL")
+                                        .arg(REDIS_TICKET_KEY)
+                                        .arg(&TicketIdsClone)
+                                        .query_async::<()>(&mut *Con)
+                                        .await
+                                    {
+                                        error!("Failed to cleanup failed match tickets: {}", DelError);
+                                    }
+                                }
+                                Err(ConnError) => {
+                                    error!("Failed to get Redis connection for failed match cleanup: {}", ConnError);
+                                }
                             }
                         }
                     }
                 });
             }
 
+            // Update unmatched tickets with expanded search ranges
             let UnmatchedTickets: Vec<&MatchmakingTicket> = Tickets
                 .iter()
                 .filter(|T| !MatchedIds.contains(&T.TicketId))
@@ -325,7 +427,9 @@ async fn main() {
                             .ignore();
                     }
                 }
-                let _: Result<(), _> = Pipeline.query_async(&mut *Connection).await;
+                if let Err(Error) = Pipeline.query_async::<()>(&mut *Connection).await {
+                    warn!("Failed to update unmatched tickets: {}", Error);
+                }
             }
         }
     });
@@ -343,14 +447,22 @@ async fn main() {
         .with_state(SharedState.clone());
 
     let Addr: &str = "0.0.0.0:3000";
-    let Listener: tokio::net::TcpListener = tokio::net::TcpListener::bind(Addr).await.unwrap();
+    let Listener = match tokio::net::TcpListener::bind(Addr).await {
+        Ok(L) => L,
+        Err(Error) => {
+            error!("Failed to bind to {}: {}", Addr, Error);
+            return;
+        }
+    };
     info!("Server Online. Listening on http://{}", Addr);
 
     let ShutdownState = SharedState.clone();
-    axum::serve(Listener, App)
+    if let Err(Error) = axum::serve(Listener, App)
         .with_graceful_shutdown(ShutdownSignal(ShutdownState))
         .await
-        .unwrap();
+    {
+        error!("Server error: {}", Error);
+    }
 }
 
 async fn HealthCheck(
@@ -377,7 +489,7 @@ async fn GetMetricsSnapshot(
         TotalTicketsExpired: Data.Metrics.TotalTicketsExpired.load(Ordering::Relaxed),
         AverageWaitTimeSeconds: Data.Metrics.GetAverageWaitTime(),
         MatchesLastMinute: 0,
-        ModeMetrics: HashMap::new(), // Per-mode metrics can be tracked separately
+        ModeMetrics: HashMap::new(),
     };
 
     (StatusCode::OK, AxumJson(Snapshot))
@@ -422,10 +534,12 @@ async fn GetTicketStatus(
 
     let QueuePosition = Data.QueuePositions.get(&TicketId).map(|V| *V);
 
-    let EstimatedWaitSeconds = if Data.Metrics.GetAverageWaitTime() > 0.0 {
-        Some((Data.Metrics.GetAverageWaitTime() * QueuePosition.unwrap_or(1) as f64) as i64)
-    } else {
-        None
+    // Only estimate wait time if we have a valid queue position
+    let EstimatedWaitSeconds = match QueuePosition {
+        Some(Position) if Data.Metrics.GetAverageWaitTime() > 0.0 => {
+            Some((Data.Metrics.GetAverageWaitTime() * Position as f64) as i64)
+        }
+        _ => None,
     };
 
     let Response = TicketStatusResponse {
@@ -453,6 +567,7 @@ async fn SubmitTicket(
 
     let Config = &Data.MatchmakerInstance.Configuration;
 
+    // Validate region for rate limiting - use provided region or default
     let PreferredRegionForLimit: String = Request.PreferredRegion
         .as_ref()
         .filter(|R| Config.ValidRegions.contains(*R))
@@ -468,6 +583,7 @@ async fn SubmitTicket(
         ));
     }
 
+    // Validate members array
     if Request.Members.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -485,7 +601,20 @@ async fn SubmitTicket(
         ));
     }
 
-    for Member in &Request.Members {
+    // Validate each member
+    for (Index, Member) in Request.Members.iter().enumerate() {
+        if Member.PlayerId == 0 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                AxumJson(ErrorResponse { Error: format!("Member {} has invalid PlayerId (0)", Index) }),
+            ));
+        }
+        if Member.PlayerName.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                AxumJson(ErrorResponse { Error: format!("Member {} has empty PlayerName", Index) }),
+            ));
+        }
         if Member.MatchmakingRating.is_nan() || Member.MatchmakingRating.is_infinite() {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -502,6 +631,25 @@ async fn SubmitTicket(
         }
     }
 
+    // Validate GameMode if provided
+    let RequestedGameMode: GameMode = Request.GameMode.unwrap_or_default();
+    if !MatchmakingLogic::ValidateGameMode(&RequestedGameMode) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            AxumJson(ErrorResponse {
+                Error: "Invalid GameMode: Name cannot be empty and MinPlayers must be > 0 and <= MaxPlayers".to_string()
+            }),
+        ));
+    }
+
+    // Validate Priority is reasonable
+    if Request.Priority > 10000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            AxumJson(ErrorResponse { Error: "Priority cannot exceed 10000".to_string() }),
+        ));
+    }
+
     let PreferredRegion: String = Request.PreferredRegion
         .filter(|R| Config.ValidRegions.contains(R))
         .unwrap_or_else(|| Config.DefaultRegion.clone());
@@ -514,8 +662,6 @@ async fn SubmitTicket(
     AllowedRegions.insert(PreferredRegion.clone());
 
     let Members: PartyMembers = Request.Members.into_iter().collect();
-
-    let RequestedGameMode: GameMode = Request.GameMode.unwrap_or_default();
 
     let NewTicket: MatchmakingTicket = MatchmakingTicket {
         TicketId,
@@ -556,7 +702,8 @@ async fn SubmitTicket(
 
     Data.Metrics.TotalTicketsProcessed.fetch_add(1, Ordering::Relaxed);
 
-    info!("+ Party Ticket Queued: {} (Size: {}, Region: {}, Mode: {})", TicketId, NewTicket.Members.len(), PreferredRegion, NewTicket.GameMode.Name);
+    info!("+ Party Ticket Queued: {} (Size: {}, Region: {}, Mode: {}, Priority: {})",
+        TicketId, NewTicket.Members.len(), PreferredRegion, NewTicket.GameMode.Name, NewTicket.Priority);
     Ok(AxumJson(TicketId))
 }
 
@@ -580,6 +727,7 @@ async fn CancelTicket(
         ))?;
 
     if Deleted > 0 {
+        Data.QueuePositions.remove(&TicketId);
         info!("- Ticket Cancelled: {}", TicketId);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -626,11 +774,19 @@ async fn SendMatchToRobloxWithRetry(
 
         match Response {
             Ok(Res) if Res.status().is_success() => {
-                info!(">>> Match {} notification sent to Roblox.", MatchId);
+                info!(">>> Match {} notification sent to Roblox ({} players).", MatchId, PlayerIds.len());
                 return Ok(());
             }
-            Ok(Res) => warn!("Attempt {} failed (Status {}): {}", CurrentAttempt, Res.status(), MatchId),
-            Err(Error) => warn!("Attempt {} failed (Error): {}", CurrentAttempt, Error),
+            Ok(Res) => {
+                let Status = Res.status();
+                let Body = Res.text().await.unwrap_or_default();
+                warn!("Attempt {}/{} failed for match {} (Status {}): {}",
+                    CurrentAttempt, MaxRetries, MatchId, Status, Body);
+            }
+            Err(Error) => {
+                warn!("Attempt {}/{} failed for match {} (Error): {}",
+                    CurrentAttempt, MaxRetries, MatchId, Error);
+            }
         }
 
         if CurrentAttempt >= MaxRetries {
@@ -640,5 +796,5 @@ async fn SendMatchToRobloxWithRetry(
         sleep(Duration::from_secs(2u64.pow(CurrentAttempt))).await;
     }
 
-    Err(anyhow::anyhow!("Failed to notify Roblox after {} attempts", MaxRetries))
+    Err(anyhow::anyhow!("Failed to notify Roblox after {} attempts for match {}", MaxRetries, MatchId))
 }
