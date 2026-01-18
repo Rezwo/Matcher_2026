@@ -761,6 +761,12 @@ async fn SendMatchToRobloxWithRetry(
 
     let Payload: serde_json::Value = json!({ "message": MessageBody });
 
+ // >>>>>>>>> PASTE HERE <<<<<<<<<
+    info!("DEBUG: Sending to URL: {}", Url);
+    info!("DEBUG: Payload: {}", Payload.to_string());
+    // Check if the key exists and print its length (don't print the actual key for security)
+    info!("DEBUG: API Key Length: {}", Config.RobloxApiKey.len()); 
+
     loop {
         CurrentAttempt += 1;
 
