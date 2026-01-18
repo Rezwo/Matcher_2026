@@ -139,6 +139,21 @@ pub fn GetStandardConfiguration() -> MatchmakingConfiguration {
         DebugMode: GetEnvOrDefault("DEBUG", "false")
             .parse()
             .unwrap_or(false),
+        HttpTimeoutSeconds: GetEnvOrDefault("HTTP_TIMEOUT_SECONDS", "30")
+            .parse()
+            .expect("HTTP_TIMEOUT_SECONDS must be a valid u64"),
+        RedisPoolMaxSize: GetEnvOrDefault("REDIS_POOL_MAX_SIZE", "16")
+            .parse()
+            .expect("REDIS_POOL_MAX_SIZE must be a valid u32"),
+        RedisPoolMinIdle: GetEnvOrDefault("REDIS_POOL_MIN_IDLE", "4")
+            .parse()
+            .expect("REDIS_POOL_MIN_IDLE must be a valid u32"),
+        SubmitRateLimitPerSecond: GetEnvOrDefault("SUBMIT_RATE_LIMIT", "1000")
+            .parse()
+            .expect("SUBMIT_RATE_LIMIT must be a valid u32"),
+        RegionalRateLimitPerSecond: GetEnvOrDefault("REGIONAL_RATE_LIMIT", "500")
+            .parse()
+            .expect("REGIONAL_RATE_LIMIT must be a valid u32"),
     };
 
     // Validate configuration on startup
